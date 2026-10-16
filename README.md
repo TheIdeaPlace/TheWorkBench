@@ -84,9 +84,9 @@ indistinguishable from the live game.
 ## Other projects
 
 ### parallels-manager
-A macOS application for managing Parallels Desktop virtual machines.
-
-[View Project][1]
+A Mac app for managing Parallels Desktop virtual machines with VoiceOver and the keyboard, and
+making new Windows 11 and Ubuntu VMs with no installer questions. **Moved to its own repository,
+[TheIdeaPlace/ParallelsManager][1].**
 
 ### win11arm-install
 Windows 11 ARM installation scripts and resources.
@@ -96,7 +96,7 @@ Windows 11 ARM installation scripts and resources.
 ### hyperv-manage
 A Windows application for managing Hyper-V virtual machines, built screen reader first: start,
 stop, connect with Remote Desktop, settings, checkpoints, cloning, and building new Windows VMs.
-The Windows counterpart of parallels-manager. **Moved to its own repository,
+The Windows counterpart of Parallels Manager. **Moved to its own repository,
 [TheIdeaPlace/HyperVManage][14].**
 
 ### hyperv-rdp-vm
@@ -124,7 +124,7 @@ See [LICENSE][3] for details.
 ## Contributing
 Contributions to existing projects are welcome. If you have a script, app or other contribution you want to share, it is also welcome. Put it in a separate directory specific to that code.
 
-[1]:	./parallels-manager
+[1]:	https://github.com/TheIdeaPlace/ParallelsManager
 [2]:	./win11arm-install
 [3]:	./LICENSE
 [4]:	./thecardplace/sheephead
