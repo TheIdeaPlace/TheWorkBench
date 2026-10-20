@@ -199,6 +199,38 @@ public class CalcSessionTests
         Assert.Equal("9", session.Evaluate(session.History[1].Expression).DisplayText);
     }
 
+    [Theory]
+    [InlineData("1/3", "*3")]
+    [InlineData("pi", "^2")]
+    [InlineData("123456789.12345679", "sin ans")]
+    [InlineData("1/3", "2ans")]
+    [InlineData("-1/7", "ans^3")]
+    [InlineData("2^70", "ans/3")]
+    [InlineData("1e-20/3", "ans*3")]
+    public void RecalledEntriesCalculateExactlyTheSame(string first, string second)
+    {
+        var session = new CalcSession();
+        session.Evaluate(first);
+        var original = session.Evaluate(second);
+        var entry = session.History[0];
+
+        session.Evaluate("12345"); // a different ans, which must not matter
+        var recalled = session.Evaluate(entry.RecallExpression);
+        Assert.True(recalled.Success, recalled.DisplayText);
+        Assert.Equal(original.Value, recalled.Value);
+    }
+
+    [Fact]
+    public void HistoryReadsTidyButRecallsExactly()
+    {
+        var session = new CalcSession();
+        session.Evaluate("1/3");
+        session.Evaluate("*3");
+        Assert.Equal("0.333333333333333 × 3 = 1", session.History[0].DisplayText);
+        Assert.Equal("0.3333333333333333 × 3", session.History[0].RecallExpression);
+        Assert.Equal("0.3333333333333333 × 3", session.RecallOlder(""));
+    }
+
     [Fact]
     public void HistoryShowsFilledInParentheses()
     {

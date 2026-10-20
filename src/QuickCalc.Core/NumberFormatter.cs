@@ -16,6 +16,14 @@ public static class NumberFormatter
         return text.Replace("E", "e", StringComparison.Ordinal);
     }
 
+    /// <summary>Every digit needed to read the same double back in, e.g. 0.3333333333333333.</summary>
+    public static string FormatExact(double value)
+    {
+        if (value == 0)
+            return "0";
+        return value.ToString("R", CultureInfo.InvariantCulture).Replace("E", "e", StringComparison.Ordinal);
+    }
+
     /// <summary>The number as words a screen reader will say clearly, for example "minus 1.5 times 10 to the power 20".</summary>
     public static string Speak(string formatted)
     {

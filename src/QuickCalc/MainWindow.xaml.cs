@@ -1,4 +1,4 @@
-﻿using System.Collections.Specialized;
+using System.Collections.Specialized;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Windows;
@@ -48,7 +48,16 @@ public partial class MainWindow : Window
         if (string.IsNullOrWhiteSpace(ExpressionBox.Text))
         {
             // Enter pressed again after a calculation: say the answer again rather than replacing it with an error.
-            Announce(_lastResult is null ? "Nothing to calculate" : "equals " + NumberFormatter.Speak(_lastResult));
+            // The Result box may still show an error from a later attempt; put the answer back so screen and speech agree.
+            if (_lastResult is null)
+            {
+                Announce("Nothing to calculate");
+            }
+            else
+            {
+                ResultBox.Text = _lastResult;
+                Announce("equals " + NumberFormatter.Speak(_lastResult));
+            }
             return;
         }
 
@@ -180,13 +189,20 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>Right after a digit, the e key inserts "×e"; a bare "2e3" would be read as scientific notation (2000).</summary>
+    /// <summary>
+    /// Keeps keypad names from merging with what's before the caret. After a digit the e key inserts "×e",
+    /// because "2e3" would be scientific notation (2000). After a letter, a name gets a space, because the
+    /// tokenizer reads a run of letters as one name: Ans then e must be "ans e", not "anse".
+    /// </summary>
     private string KeypadInsertion(string tag)
     {
         int caret = ExpressionBox.SelectionStart;
-        if (tag == "e" && caret > 0 && ExpressionBox.Text[caret - 1] is (>= '0' and <= '9') or '.')
+        if (caret == 0 || !char.IsAsciiLetter(tag[0]))
+            return tag;
+        char before = ExpressionBox.Text[caret - 1];
+        if (tag == "e" && (char.IsAsciiDigit(before) || before == '.'))
             return "×e";
-        return tag;
+        return char.IsAsciiLetter(before) ? " " + tag : tag;
     }
 
     /// <summary>Typing while on the keypad goes to the expression box, so nobody has to tab back first.</summary>
@@ -233,7 +249,9 @@ public partial class MainWindow : Window
         HistoryList.IsTabStop = _session.History.Count == 0;
         // Keep the newest calculation selected, so Tab into History lands on it rather than on an older one.
         if (e.Action == NotifyCollectionChangedAction.Add && e.NewStartingIndex == 0 && !HistoryList.IsKeyboardFocusWithin)
+        {
             HistoryList.SelectedIndex = 0;
+        }
     }
 
     /// <summary>
@@ -242,8 +260,20 @@ public partial class MainWindow : Window
     /// </summary>
     private void HistoryList_GotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
     {
-        if (e.NewFocus != HistoryList || _session.History.Count == 0)
+        if (_session.History.Count == 0)
             return;
+
+        bool listItself = e.NewFocus == HistoryList;
+        // Tab into the list returns to whichever entry last had focus, which may be an old one. Coming in from
+        // outside by keyboard, go to the selected entry (the newest) instead. Mouse clicks are left alone.
+        bool tabbedInToAnotherEntry = e.NewFocus is ListBoxItem item
+            && !(e.OldFocus is DependencyObject old && HistoryList.IsAncestorOf(old))
+            && InputManager.Current.MostRecentInputDevice is KeyboardDevice
+            && HistoryList.SelectedIndex >= 0
+            && HistoryList.ItemContainerGenerator.IndexFromContainer(item) != HistoryList.SelectedIndex;
+        if (!listItself && !tabbedInToAnotherEntry)
+            return;
+
         if (HistoryList.SelectedIndex < 0)
             HistoryList.SelectedIndex = 0;
         HistoryList.ScrollIntoView(HistoryList.SelectedItem);
@@ -304,7 +334,7 @@ public partial class MainWindow : Window
     private void UseHistoryEntry(HistoryEntry entry)
     {
         ExpressionBox.Focus();
-        SetExpression(entry.Expression, entry.Expression.Length);
+        SetExpression(entry.RecallExpression, entry.RecallExpression.Length);
     }
 
     private void ClearHistory_Click(object sender, RoutedEventArgs e)

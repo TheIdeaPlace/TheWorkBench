@@ -6,11 +6,18 @@ namespace QuickCalc.Core;
 /// A class rather than a record on purpose: two identical calculations must stay separate entries,
 /// or the history list confuses them when selecting and deleting.
 /// </summary>
-public sealed class HistoryEntry(string expression, string result)
+public sealed class HistoryEntry(string expression, string result, string? recallExpression = null)
 {
+    /// <summary>For reading: "ans" shown as its value rounded to 15 digits, like every other number on screen.</summary>
     public string Expression { get; } = expression;
 
     public string Result { get; } = result;
+
+    /// <summary>
+    /// For bringing back into the expression box: "ans" written with every digit, so it calculates exactly the same
+    /// result later. Same as <see cref="Expression"/> when no "ans" was used.
+    /// </summary>
+    public string RecallExpression { get; } = recallExpression ?? expression;
 
     public string DisplayText => $"{Expression} = {Result}";
 
@@ -48,7 +55,10 @@ public sealed class CalcSession
             double value = Evaluator.Evaluate(effective, AngleMode, Answer);
             string formatted = NumberFormatter.Format(value);
             // History shows "ans" as the number it stood for, so recalling the entry later gives the same result.
-            History.Insert(0, new HistoryEntry(ExpressionText.ToDisplay(effective, Answer), formatted));
+            History.Insert(0, new HistoryEntry(
+                ExpressionText.ToDisplay(effective, Answer),
+                formatted,
+                ExpressionText.ToDisplay(effective, Answer, exactAnswer: true)));
             while (History.Count > MaxHistory)
                 History.RemoveAt(History.Count - 1);
             Answer = value;
@@ -92,7 +102,7 @@ public sealed class CalcSession
         if (_historyCursor == -1)
             _draft = current;
         _historyCursor++;
-        return History[_historyCursor].Expression;
+        return History[_historyCursor].RecallExpression;
     }
 
     /// <summary>Down arrow: the next newer history expression, then what was being typed before browsing, then null.</summary>
@@ -101,7 +111,7 @@ public sealed class CalcSession
         if (_historyCursor < 0)
             return null;
         _historyCursor--;
-        return _historyCursor < 0 ? _draft : History[_historyCursor].Expression;
+        return _historyCursor < 0 ? _draft : History[_historyCursor].RecallExpression;
     }
 
     /// <summary>Stops history browsing, for example after the person edits the recalled text.</summary>

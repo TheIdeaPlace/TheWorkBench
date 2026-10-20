@@ -86,6 +86,17 @@ public class EvaluatorTests
     public void LargeDegreeAnglesStayExact(string expression, string expected) => Assert.Equal(expected, Calc(expression));
 
     [Theory]
+    [InlineData("cos", 1e17)]
+    [InlineData("cos", 1e18)]
+    [InlineData("tan", 1e17)]
+    [InlineData("sin", 1e17)]
+    public void HugeDegreeAnglesMatchTheSameAngleWithinOneTurn(string function, double angle)
+    {
+        string reduced = Math.IEEERemainder(angle, 360).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        Assert.Equal(Calc($"{function}({reduced})"), Calc($"{function}({angle:R})"));
+    }
+
+    [Theory]
     [InlineData(5000, '(')]
     [InlineData(5000, '-')]
     [InlineData(300, '(')]
@@ -178,6 +189,8 @@ public class EvaluatorTests
     [InlineData("(2)3", "Two numbers need an operator between them", 3)]
     [InlineData("e2", "\"e\" and 2 need an operator between them", 1)]
     [InlineData("ans2", "\"ans\" and 2 need an operator between them", 3)]
+    [InlineData("π2", "\"π\" and 2 need an operator between them", 1)]
+    [InlineData("PI2", "\"PI\" and 2 need an operator between them", 2)]
     [InlineData("1.2.3", "A number can only have one decimal point", 3)]
     [InlineData("5+.", "A decimal point needs a digit after it", 2)]
     [InlineData("foo(2)", "\"foo\" is not a name QuickCalc knows", 0)]

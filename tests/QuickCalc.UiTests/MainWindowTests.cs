@@ -308,6 +308,37 @@ public sealed partial class MainWindowTests : IDisposable
     }
 
     [Fact]
+    public void KeypadNamesDoNotRunTogether()
+    {
+        Invoke("3");
+        Invoke("Equals");
+        ExpectResult("3");
+        Invoke("Previous answer");
+        Invoke("e");
+        ExpectExpression("ans e");
+        Invoke("Natural log");
+        ExpectExpression("ans e ln(");
+        Invoke("e");
+        Invoke("Equals");
+        ExpectResult("8.15484548537714"); // 3 × e × ln(e)
+    }
+
+    [Fact]
+    public void EnterOnAnEmptyExpressionAfterAnErrorShowsTheAnswerAgain()
+    {
+        Type("6*6");
+        Press(VirtualKeyShort.ENTER);
+        ExpectResult("36");
+        Type("1/0");
+        Press(VirtualKeyShort.ENTER);
+        ExpectResult("Error: Cannot divide by zero");
+        Press(VirtualKeyShort.ESCAPE);
+        Press(VirtualKeyShort.ENTER);
+        ExpectAnnouncement("equals 36");
+        ExpectResult("36");
+    }
+
+    [Fact]
     public void NumberPadDecimalTypesAPoint()
     {
         Type("1");
@@ -383,6 +414,51 @@ public sealed partial class MainWindowTests : IDisposable
         ExpectFocusName("2 + 2 = 4");
         Press(VirtualKeyShort.TAB);
         ExpectFocusId("ExpressionBox");
+    }
+
+    [Fact]
+    public void TabIntoHistoryLandsOnTheNewestEvenAfterVisitingAnOlderOne()
+    {
+        Type("1+1");
+        Press(VirtualKeyShort.ENTER);
+        ExpectResult("2");
+        Type("2+2");
+        Press(VirtualKeyShort.ENTER);
+        ExpectResult("4");
+
+        PressWith(VirtualKeyShort.ALT, VirtualKeyShort.KEY_Y);
+        ExpectFocusName("2 + 2 = 4");
+        Press(VirtualKeyShort.DOWN);
+        ExpectFocusName("1 + 1 = 2");
+
+        PressWith(VirtualKeyShort.ALT, VirtualKeyShort.KEY_P);
+        ExpectFocusId("ExpressionBox");
+        Type("3+3");
+        Press(VirtualKeyShort.ENTER);
+        ExpectResult("6");
+
+        PressWith(VirtualKeyShort.ALT, VirtualKeyShort.KEY_K);
+        ExpectFocusName("Sine");
+        Press(VirtualKeyShort.TAB);
+        ExpectFocusName("3 + 3 = 6");
+    }
+
+    [Fact]
+    public void ClearHistoryFromTheMenuMovesFocusToTheExpression()
+    {
+        Type("1+1");
+        Press(VirtualKeyShort.ENTER);
+        ExpectResult("2");
+        PressWith(VirtualKeyShort.ALT, VirtualKeyShort.KEY_Y);
+        ExpectFocusName("1 + 1 = 2");
+
+        PressWith(VirtualKeyShort.ALT, VirtualKeyShort.KEY_E);
+        ExpectFocusName("Copy result");
+        NewStep();
+        Send(() => Keyboard.Type(VirtualKeyShort.KEY_H));
+        ExpectFocusId("ExpressionBox");
+        ExpectAnnouncement("History cleared");
+        Assert.Empty(History.Items);
     }
 
     [Fact]

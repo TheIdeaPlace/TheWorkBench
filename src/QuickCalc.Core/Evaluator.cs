@@ -36,14 +36,16 @@ public sealed class Evaluator
 
     private const int MaxDepth = 250;
 
+    private readonly string _source;
     private readonly IReadOnlyList<Token> _tokens;
     private readonly AngleMode _angleMode;
     private readonly double _answer;
     private int _pos;
     private int _depth;
 
-    private Evaluator(IReadOnlyList<Token> tokens, AngleMode angleMode, double answer)
+    private Evaluator(string source, IReadOnlyList<Token> tokens, AngleMode angleMode, double answer)
     {
+        _source = source;
         _tokens = tokens;
         _angleMode = angleMode;
         _answer = answer;
@@ -60,7 +62,7 @@ public sealed class Evaluator
         if (tokens.Count == 1)
             throw new CalcException("Nothing to calculate", 0);
 
-        var evaluator = new Evaluator(tokens, angleMode, answer);
+        var evaluator = new Evaluator(expression, tokens, angleMode, answer);
         double value = evaluator.ParseSum();
         var next = evaluator.Peek;
         if (next.Kind == TokenKind.CloseParen)
@@ -133,7 +135,7 @@ public sealed class Evaluator
                 var previous = _tokens[_pos - 1];
                 throw new CalcException(
                     previous.Kind == TokenKind.Name
-                        ? $"\"{previous.Text}\" and {token.Text} need an operator between them"
+                        ? $"\"{AsTyped(previous)}\" and {token.Text} need an operator between them"
                         : "Two numbers need an operator between them",
                     token.Position);
             }
@@ -143,6 +145,10 @@ public sealed class Evaluator
             }
         }
     }
+
+    /// <summary>A name as the person typed it: "π" rather than "pi", "SIN" rather than "sin".</summary>
+    private string AsTyped(Token name) =>
+        _source[name.Position] is 'π' or '√' ? _source[name.Position].ToString() : _source.Substring(name.Position, name.Text.Length);
 
     private double ParseUnary(out bool isPercent)
     {
@@ -310,15 +316,17 @@ public sealed class Evaluator
         return Math.Sin(_angleMode == AngleMode.Degrees ? Math.IEEERemainder(x, 360) * Math.PI / 180 : x);
     }
 
-    private double Cosine(double x) => _angleMode == AngleMode.Degrees ? Sine(x + 90) : Math.Cos(x);
+    // Reduce to one turn before adding 90: for huge angles, x + 90 would itself round and give the wrong angle.
+    private double Cosine(double x) => _angleMode == AngleMode.Degrees ? Sine(Math.IEEERemainder(x, 360) + 90) : Math.Cos(x);
 
     private double Tangent(double x, int at)
     {
         if (_angleMode == AngleMode.Radians)
             return Math.Tan(x);
-        if (IsMultipleOf(x - 90, 180))
+        double turn = Math.IEEERemainder(x, 360);
+        if (IsMultipleOf(turn - 90, 180))
             throw new CalcException($"The tangent of {NumberFormatter.Format(x)} degrees is undefined", at);
-        return Sine(x) / Cosine(x);
+        return Sine(turn) / Cosine(turn);
     }
 
     private static bool IsMultipleOf(double x, double step) => Math.IEEERemainder(x, step) == 0;

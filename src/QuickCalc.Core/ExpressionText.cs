@@ -33,7 +33,8 @@ public static class ExpressionText
     /// at the end are added. When <paramref name="answer"/> is given, "ans" is shown as that number, so a calculation
     /// recalled from history gives the same result later. Returns the input unchanged if it can't be read.
     /// </summary>
-    public static string ToDisplay(string expression, double? answer = null)
+    /// <param name="exactAnswer">Write "ans" with every digit (round-trip) instead of the 15-digit display form.</param>
+    public static string ToDisplay(string expression, double? answer = null, bool exactAnswer = false)
     {
         if (!TryTokenize(expression, out var tokens))
             return expression.Trim();
@@ -57,7 +58,7 @@ public static class ExpressionText
             {
                 TokenKind.Operator => token.Text switch { "*" => "×", "/" => "÷", "-" => "−", _ => token.Text },
                 TokenKind.Name when token.Text == "pi" => "π",
-                TokenKind.Name when token.Text == "ans" && answer is double value => AnswerText(value, previous),
+                TokenKind.Name when token.Text == "ans" && answer is double value => AnswerText(value, previous, exactAnswer),
                 _ => token.Text,
             });
             if (binary)
@@ -69,9 +70,9 @@ public static class ExpressionText
     }
 
     // Parentheses keep the meaning: "ans^2" with ans = −3 is (−3)^2, and "2ans" with ans = 5 is 2 (5), not "2 5".
-    private static string AnswerText(double answer, Token? previous)
+    private static string AnswerText(double answer, Token? previous, bool exact)
     {
-        string text = NumberFormatter.Format(answer);
+        string text = exact ? NumberFormatter.FormatExact(answer) : NumberFormatter.Format(answer);
         bool impliedMultiplication = previous is not null &&
             (previous.Kind is TokenKind.Number or TokenKind.Name or TokenKind.CloseParen || previous.IsOperator('%') || previous.IsOperator('!'));
         if (text.StartsWith('-'))
