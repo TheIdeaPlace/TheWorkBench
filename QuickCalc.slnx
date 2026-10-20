@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/QuickCalc.Core/QuickCalc.Core.csproj" />
+    <Project Path="src/QuickCalc/QuickCalc.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/QuickCalc.Core.Tests/QuickCalc.Core.Tests.csproj" />
+    <Project Path="tests/QuickCalc.UiTests/QuickCalc.UiTests.csproj" />
+  </Folder>
+</Solution>
