@@ -1,4 +1,5 @@
-﻿using System.Reflection;
+﻿using System.Collections.Specialized;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Automation;
@@ -33,7 +34,7 @@ public partial class MainWindow : Window
         HistoryList.ItemsSource = _session.History;
         // An empty ListBox has no item to take focus, so Tab would skip it. Make the list itself a stop until it has items,
         // so a screen reader user still finds it and hears that it's empty.
-        _session.History.CollectionChanged += (_, _) => HistoryList.IsTabStop = _session.History.Count == 0;
+        _session.History.CollectionChanged += History_CollectionChanged;
         HistoryList.IsTabStop = true;
         PreviewKeyDown += Window_PreviewKeyDown;
         ExpressionBox.PreviewTextInput += ExpressionBox_PreviewTextInput;
@@ -44,6 +45,13 @@ public partial class MainWindow : Window
 
     private void Evaluate()
     {
+        if (string.IsNullOrWhiteSpace(ExpressionBox.Text))
+        {
+            // Enter pressed again after a calculation: say the answer again rather than replacing it with an error.
+            Announce(_lastResult is null ? "Nothing to calculate" : "equals " + NumberFormatter.Speak(_lastResult));
+            return;
+        }
+
         var result = _session.Evaluate(ExpressionBox.Text);
         ResultBox.Text = result.DisplayText;
         if (result.Success)
@@ -96,6 +104,11 @@ public partial class MainWindow : Window
         {
             case Key.Enter:
                 Evaluate();
+                e.Handled = true;
+                break;
+            case Key.Decimal:
+                // In many locales the number pad's decimal key types a comma; QuickCalc uses a point.
+                InsertIntoExpression(".");
                 e.Handled = true;
                 break;
             case Key.Escape when ExpressionBox.Text.Length > 0:
@@ -161,10 +174,19 @@ public partial class MainWindow : Window
                 BackspaceExpression();
                 break;
             default:
-                InsertIntoExpression(tag);
+                InsertIntoExpression(KeypadInsertion(tag));
                 Announce(ExpressionText.ToSpeech(ExpressionBox.Text));
                 break;
         }
+    }
+
+    /// <summary>Right after a digit, the e key inserts "×e"; a bare "2e3" would be read as scientific notation (2000).</summary>
+    private string KeypadInsertion(string tag)
+    {
+        int caret = ExpressionBox.SelectionStart;
+        if (tag == "e" && caret > 0 && ExpressionBox.Text[caret - 1] is (>= '0' and <= '9') or '.')
+            return "×e";
+        return tag;
     }
 
     /// <summary>Typing while on the keypad goes to the expression box, so nobody has to tab back first.</summary>
@@ -191,6 +213,12 @@ public partial class MainWindow : Window
             BackspaceExpression();
             e.Handled = true;
         }
+        else if (e.Key == Key.Decimal)
+        {
+            ExpressionBox.Focus();
+            InsertIntoExpression(".");
+            e.Handled = true;
+        }
         else if (e.Key == Key.Escape)
         {
             ClearExpression();
@@ -200,9 +228,39 @@ public partial class MainWindow : Window
 
     // ---- History ----
 
+    private void History_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        HistoryList.IsTabStop = _session.History.Count == 0;
+        // Keep the newest calculation selected, so Tab into History lands on it rather than on an older one.
+        if (e.Action == NotifyCollectionChangedAction.Add && e.NewStartingIndex == 0 && !HistoryList.IsKeyboardFocusWithin)
+            HistoryList.SelectedIndex = 0;
+    }
+
+    /// <summary>
+    /// Alt+Y (and clicking the list's empty area) focuses the list itself. Pass focus on to an entry so the
+    /// screen reader reads a calculation, not just "History list".
+    /// </summary>
+    private void HistoryList_GotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (e.NewFocus != HistoryList || _session.History.Count == 0)
+            return;
+        if (HistoryList.SelectedIndex < 0)
+            HistoryList.SelectedIndex = 0;
+        HistoryList.ScrollIntoView(HistoryList.SelectedItem);
+        HistoryList.UpdateLayout();
+        (HistoryList.ItemContainerGenerator.ContainerFromIndex(HistoryList.SelectedIndex) as ListBoxItem)?.Focus();
+    }
+
+    /// <summary>
+    /// The entry the screen reader last read: the focused item. Focus and selection can differ
+    /// (Ctrl+arrow moves only focus), so keys act on focus, falling back to the selection.
+    /// </summary>
+    private HistoryEntry? FocusedHistoryEntry() =>
+        (Keyboard.FocusedElement as ListBoxItem)?.DataContext as HistoryEntry ?? HistoryList.SelectedItem as HistoryEntry;
+
     private void HistoryList_PreviewKeyDown(object sender, KeyEventArgs e)
     {
-        if (HistoryList.SelectedItem is not HistoryEntry entry)
+        if (FocusedHistoryEntry() is not HistoryEntry entry)
             return;
 
         if (e.Key == Key.Enter && Keyboard.Modifiers == ModifierKeys.None)
@@ -217,19 +275,21 @@ public partial class MainWindow : Window
         }
         else if (e.Key == Key.Delete && Keyboard.Modifiers == ModifierKeys.None)
         {
-            int index = HistoryList.SelectedIndex;
+            int index = _session.History.IndexOf(entry);
             _session.History.RemoveAt(index);
             _session.ResetHistoryCursor();
             if (_session.History.Count == 0)
             {
-                Announce("Removed. History is empty");
                 ExpressionBox.Focus();
+                Announce("Removed. History is empty");
             }
             else
             {
+                // No announcement here: focus lands on the next entry and the screen reader reads it, as in File Explorer.
+                // An announcement would cut that off.
                 HistoryList.SelectedIndex = Math.Min(index, _session.History.Count - 1);
+                HistoryList.UpdateLayout();
                 (HistoryList.ItemContainerGenerator.ContainerFromIndex(HistoryList.SelectedIndex) as ListBoxItem)?.Focus();
-                Announce("Removed");
             }
             e.Handled = true;
         }
@@ -249,7 +309,11 @@ public partial class MainWindow : Window
 
     private void ClearHistory_Click(object sender, RoutedEventArgs e)
     {
+        // If focus was on an entry, it is about to disappear; put it somewhere useful first.
+        bool focusWasInHistory = HistoryList.IsKeyboardFocusWithin;
         _session.ClearHistory();
+        if (focusWasInHistory)
+            ExpressionBox.Focus();
         Announce("History cleared");
     }
 
@@ -268,7 +332,7 @@ public partial class MainWindow : Window
             CopyResult();
             e.Handled = true;
         }
-        else if (modifiers == ModifierKeys.Control && e.Key is Key.OemPlus or Key.Add)
+        else if (modifiers is ModifierKeys.Control or (ModifierKeys.Control | ModifierKeys.Shift) && e.Key is Key.OemPlus or Key.Add)
         {
             ChangeZoom(ZoomStep);
             e.Handled = true;

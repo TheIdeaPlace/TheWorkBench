@@ -24,7 +24,7 @@ internal static class HelpText
         + - * / and × ÷ −, ^ for powers, ( ), % for percent, ! for factorial.
         80 + 15% is 92 (15% of 80 added). On its own, 15% is 0.15.
         Start with an operator to continue from the last answer: * 2 doubles it. Or type ans.
-        Writing numbers side by side multiplies: 2pi, 3(4 + 1).
+        Writing numbers side by side multiplies: 2pi, 3(4 + 1). This comes before × and ÷, so 1/2pi is 1 ÷ (2π).
         Missing closing parentheses at the end are filled in.
         Functions: sqrt, cbrt, abs, sin, cos, tan, asin, acos, atan, ln, log, exp, round, floor, ceil. Parentheses are optional: sqrt 16.
         Constants: pi, e. Scientific notation: 1.5e3.

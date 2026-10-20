@@ -31,10 +31,12 @@ public static class NumberFormatter
 
         string mantissa = formatted[..e];
         string exponent = formatted[(e + 1)..].TrimStart('+');
-        if (exponent.StartsWith('-'))
-            exponent = "minus " + exponent[1..].TrimStart('0');
-        else
-            exponent = exponent.TrimStart('0');
-        return $"{sign}{mantissa} times 10 to the power {exponent}";
+        bool negative = exponent.StartsWith('-');
+        string digits = (negative ? exponent[1..] : exponent).TrimStart('0');
+        if (digits.Length == 0)
+            digits = "0";
+        else if (negative)
+            digits = "minus " + digits;
+        return $"{sign}{mantissa} times 10 to the power {digits}";
     }
 }

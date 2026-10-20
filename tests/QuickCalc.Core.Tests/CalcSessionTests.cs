@@ -28,7 +28,7 @@ public class CalcSessionTests
 
         Assert.False(result.Success);
         Assert.Equal("Error: Cannot divide by zero", result.DisplayText);
-        Assert.Equal("Error: Cannot divide by zero", result.SpokenText);
+        Assert.Equal("Error: Cannot divide by zero, at character 2", result.SpokenText);
         Assert.Equal(1, result.ErrorPosition);
         Assert.Equal(5, session.Answer);
         Assert.Single(session.History);
@@ -81,7 +81,7 @@ public class CalcSessionTests
         var session = new CalcSession();
         session.Evaluate("10");
         session.Evaluate("*2");
-        Assert.Equal("ans × 2 = 20", session.History[0].DisplayText);
+        Assert.Equal("10 × 2 = 20", session.History[0].DisplayText); // the number ans stood for, so recalling it is stable
     }
 
     [Fact]
@@ -149,6 +149,63 @@ public class CalcSessionTests
         session.ResetHistoryCursor();
         Assert.Equal("2", session.RecallOlder("y"));
         Assert.Equal("y", session.RecallNewer());
+    }
+
+    [Fact]
+    public void ErrorSpeechSaysWhereTheProblemIs()
+    {
+        var session = new CalcSession();
+        Assert.Equal("Error: The expression ends before it is complete, at the end", session.Evaluate("2+").SpokenText);
+        Assert.Equal("Error: Nothing to calculate", session.Evaluate("").SpokenText);
+        Assert.Equal("Error: Nothing to calculate", session.Evaluate("  ").SpokenText);
+        var result = session.Evaluate("sqrt(-4)");
+        Assert.Equal("Error: Cannot take the square root of a negative number", result.DisplayText);
+        Assert.Equal("Error: Cannot take the square root of a negative number, at character 1", result.SpokenText);
+    }
+
+    [Fact]
+    public void ErrorAfterAddedAnsSpeaksTheTypedPosition()
+    {
+        var session = new CalcSession();
+        session.Evaluate("10");
+        Assert.Equal("Error: Cannot divide by zero, at character 3", session.Evaluate("  /0").SpokenText);
+    }
+
+    [Fact]
+    public void LeadingOperatorStillWorksAfterClearingHistory()
+    {
+        var session = new CalcSession();
+        session.Evaluate("10");
+        session.ClearHistory();
+        Assert.Equal("20", session.Evaluate("*2").DisplayText);
+    }
+
+    [Fact]
+    public void LeadingFactorialContinuesFromAnswer()
+    {
+        var session = new CalcSession();
+        session.Evaluate("5");
+        Assert.Equal("120", session.Evaluate("!").DisplayText);
+    }
+
+    [Fact]
+    public void RecalledHistoryGivesTheSameResultLater()
+    {
+        var session = new CalcSession();
+        session.Evaluate("-3");
+        session.Evaluate("ans^2");
+        Assert.Equal("(−3) ^ 2 = 9", session.History[0].DisplayText);
+        session.Evaluate("100");
+        Assert.Equal("9", session.Evaluate(session.History[1].Expression).DisplayText);
+    }
+
+    [Fact]
+    public void HistoryShowsFilledInParentheses()
+    {
+        var session = new CalcSession();
+        session.Evaluate("10");
+        session.Evaluate("* (2");
+        Assert.Equal("10 × (2) = 20", session.History[0].DisplayText);
     }
 
     [Fact]

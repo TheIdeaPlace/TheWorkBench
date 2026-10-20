@@ -32,13 +32,15 @@ You type a whole calculation, such as `12 × (3 − 1)` or `80 + 15%`, and press
 - `+ - * /` or `× ÷ −`, `^` for powers (`**` works too), parentheses, `%` and `!` (factorial)
 - `80 + 15%` is 92 (15% of 80 is added). On its own, `15%` is 0.15.
 - Start with an operator to carry on from the last answer: `* 2` doubles it. You can also type `ans`.
-- Writing things side by side multiplies them: `2pi`, `3(4 + 1)`.
+- Writing things side by side multiplies them: `2pi`, `3(4 + 1)`. This binds tighter than × and ÷, as in written math, so `1/2pi` is 1 ÷ (2π).
 - Missing closing parentheses at the end are filled in.
 - Functions: `sqrt cbrt abs sin cos tan asin acos atan ln log exp round floor ceil`. Parentheses are optional: `sqrt 16`.
 - Constants `pi` (or `π`) and `e`. Scientific notation: `1.5e3`.
 - Angles are in degrees unless you choose Radians.
 
-Results show up to 15 significant digits, so `0.1 + 0.2` shows 0.3.
+Results show up to 15 significant digits, so `0.1 + 0.2` shows 0.3. The decimal point is always `.`; the number pad's decimal key types one whatever your region uses.
+
+History shows each calculation the way it was worked out: if you typed `* 2` after an answer of 36, the entry reads `36 × 2 = 72`, so bringing it back later gives the same result.
 
 ## Building
 

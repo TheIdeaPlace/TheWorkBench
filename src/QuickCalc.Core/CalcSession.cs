@@ -2,8 +2,16 @@ using System.Collections.ObjectModel;
 
 namespace QuickCalc.Core;
 
-public sealed record HistoryEntry(string Expression, string Result)
+/// <summary>
+/// A class rather than a record on purpose: two identical calculations must stay separate entries,
+/// or the history list confuses them when selecting and deleting.
+/// </summary>
+public sealed class HistoryEntry(string expression, string result)
 {
+    public string Expression { get; } = expression;
+
+    public string Result { get; } = result;
+
     public string DisplayText => $"{Expression} = {Result}";
 
     public override string ToString() => DisplayText;
@@ -28,6 +36,9 @@ public sealed class CalcSession
     /// <summary>Newest first.</summary>
     public ObservableCollection<HistoryEntry> History { get; } = [];
 
+    /// <summary>True once any calculation has succeeded, so "ans" and a leading operator have something to continue from.</summary>
+    public bool HasAnswer { get; private set; }
+
     public EvaluationResult Evaluate(string expression)
     {
         _historyCursor = -1;
@@ -36,18 +47,29 @@ public sealed class CalcSession
         {
             double value = Evaluator.Evaluate(effective, AngleMode, Answer);
             string formatted = NumberFormatter.Format(value);
-            Answer = value;
-            History.Insert(0, new HistoryEntry(ExpressionText.ToDisplay(effective), formatted));
+            // History shows "ans" as the number it stood for, so recalling the entry later gives the same result.
+            History.Insert(0, new HistoryEntry(ExpressionText.ToDisplay(effective, Answer), formatted));
             while (History.Count > MaxHistory)
                 History.RemoveAt(History.Count - 1);
+            Answer = value;
+            HasAnswer = true;
             return new EvaluationResult(true, formatted, "equals " + NumberFormatter.Speak(formatted), value);
         }
         catch (CalcException ex)
         {
             // Positions refer to the text the person typed, not to the "ans" we may have added in front.
             int position = ex.Position < 0 ? -1 : Math.Max(0, ex.Position - (effective.Length - expression.Length));
-            return new EvaluationResult(false, "Error: " + ex.Message, "Error: " + ex.Message, ErrorPosition: position);
+            string message = "Error: " + ex.Message;
+            return new EvaluationResult(false, message, message + WhereSpoken(expression, position), ErrorPosition: position);
         }
+    }
+
+    // The caret moves to the problem, but screen readers don't speak a caret move the program makes, so say where it is.
+    private static string WhereSpoken(string expression, int position)
+    {
+        if (position < 0 || string.IsNullOrWhiteSpace(expression))
+            return "";
+        return position >= expression.TrimEnd().Length ? ", at the end" : $", at character {position + 1}";
     }
 
     /// <summary>
@@ -57,7 +79,7 @@ public sealed class CalcSession
     public string ApplyAnswerPrefix(string expression)
     {
         string trimmed = expression.TrimStart();
-        if (History.Count > 0 && trimmed.Length > 0 && "+*/^×÷·%".Contains(trimmed[0]))
+        if (HasAnswer && trimmed.Length > 0 && "+*/^×÷·%!".Contains(trimmed[0]))
             return "ans" + expression;
         return expression;
     }

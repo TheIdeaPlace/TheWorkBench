@@ -45,14 +45,14 @@
                     <ScaleTransform x:Name="Zoom" ScaleX="1" ScaleY="1" />
                 </Grid.LayoutTransform>
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="380" />
                     <ColumnDefinition Width="16" />
-                    <ColumnDefinition Width="*" MinWidth="200" />
+                    <ColumnDefinition Width="320" />
                 </Grid.ColumnDefinitions>
 
-                <StackPanel Grid.Column="0">
+                <StackPanel x:Name="LeftPanel" Grid.Column="0">
                     <Label Content="Ex_pression:" Target="{Binding ElementName=ExpressionBox}" Padding="0,0,0,2" />
-                    <TextBox x:Name="ExpressionBox" FontSize="24" Padding="4" AutomationProperties.Name="Expression"
+                    <TextBox x:Name="ExpressionBox" FontSize="24" Padding="4" AutomationProperties.Name="Expression" MaxLength="1000"
                              AutomationProperties.HelpText="Type a calculation and press Enter. Up and Down arrows recall earlier calculations. Escape clears."
                              PreviewKeyDown="ExpressionBox_PreviewKeyDown"
                              TextChanged="ExpressionBox_TextChanged" />
@@ -120,12 +120,14 @@
                     </GroupBox>
                 </StackPanel>
 
-                <DockPanel Grid.Column="2">
+                <!-- As tall as the left side, so the list scrolls by itself instead of stretching the window. -->
+                <DockPanel Grid.Column="2" Height="{Binding ActualHeight, ElementName=LeftPanel}">
                     <Label DockPanel.Dock="Top" Content="Histor_y:" Target="{Binding ElementName=HistoryList}" Padding="0,0,0,2" />
                     <ListBox x:Name="HistoryList"
                              AutomationProperties.Name="History"
                              AutomationProperties.HelpText="Enter puts the calculation back in the expression box. Ctrl+C copies it. Delete removes it."
                              PreviewKeyDown="HistoryList_PreviewKeyDown"
+                             GotKeyboardFocus="HistoryList_GotKeyboardFocus"
                              MouseDoubleClick="HistoryList_MouseDoubleClick">
                         <ListBox.ItemContainerStyle>
                             <Style TargetType="ListBoxItem">

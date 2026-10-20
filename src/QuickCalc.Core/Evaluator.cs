@@ -8,7 +8,7 @@ public enum AngleMode
 
 /// <summary>
 /// Recursive-descent evaluator. Precedence, lowest first:
-/// <c>+ -</c>, then <c>× ÷</c> and implied multiplication (<c>2π</c>, <c>3(4)</c>),
+/// <c>+ -</c>, then <c>× ÷</c>, then implied multiplication (<c>2π</c>, <c>3(4)</c>),
 /// then unary minus, then <c>^</c> (right-associative, so <c>-2^2</c> is -4), then postfix <c>%</c> and <c>!</c>.
 /// Missing closing parentheses at the end are filled in. In <c>a + b%</c> and <c>a − b%</c>,
 /// the percent is a percent of <c>a</c>, so 80 + 15% is 92; anywhere else <c>b%</c> is b ÷ 100.
@@ -34,10 +34,13 @@ public sealed class Evaluator
         ["ceil"] = "ceiling",
     };
 
+    private const int MaxDepth = 250;
+
     private readonly IReadOnlyList<Token> _tokens;
     private readonly AngleMode _angleMode;
     private readonly double _answer;
     private int _pos;
+    private int _depth;
 
     private Evaluator(IReadOnlyList<Token> tokens, AngleMode angleMode, double answer)
     {
@@ -86,70 +89,95 @@ public sealed class Evaluator
         return left;
     }
 
-    /// <param name="isPercent">True when the whole product is a single factor ending in %, such as "15%".</param>
+    /// <param name="isPercent">True when the whole product is one operand ending in %, such as "15%" or "-15%".</param>
     private double ParseProduct(out bool isPercent)
     {
-        double left = ParseUnary();
-        int factors = 1;
-        while (true)
+        double left = ParseImplied(out isPercent);
+        while (Peek.IsOperator('*') || Peek.IsOperator('/'))
         {
-            var token = Peek;
-            if (token.IsOperator('*') || token.IsOperator('/'))
+            var op = Next();
+            isPercent = false;
+            double right = ParseImplied(out _);
+            if (op.Text == "/")
             {
-                Next();
-                double right = ParseUnary();
-                if (token.Text == "/")
-                {
-                    if (right == 0)
-                        throw new CalcException("Cannot divide by zero", token.Position);
-                    left /= right;
-                }
-                else
-                {
-                    left *= right;
-                }
-            }
-            else if (token.Kind is TokenKind.Name or TokenKind.OpenParen)
-            {
-                left *= ParseUnary(); // implied multiplication: 2π, 3(4), (1)(2)
-            }
-            else if (token.Kind == TokenKind.Number)
-            {
-                throw new CalcException("Two numbers need an operator between them", token.Position);
+                if (right == 0)
+                    throw new CalcException("Cannot divide by zero", op.Position);
+                left /= right;
             }
             else
             {
-                break;
+                left *= right;
             }
-            factors++;
-            left = Check(left, token.Position);
+            left = Check(left, op.Position);
         }
-        isPercent = factors == 1 && _tokens[_pos - 1].IsOperator('%');
         return left;
     }
 
-    private double ParseUnary()
+    /// <summary>
+    /// Implied multiplication (2π, 3(4), (1)(2)) binds tighter than × and ÷, as it does in written math,
+    /// so 1/2π is 1/(2π).
+    /// </summary>
+    private double ParseImplied(out bool isPercent)
     {
-        if (Peek.IsOperator('-'))
+        double left = ParseUnary(out isPercent);
+        while (true)
         {
-            Next();
-            return -ParseUnary();
+            var token = Peek;
+            if (token.Kind is TokenKind.Name or TokenKind.OpenParen)
+            {
+                isPercent = false;
+                left = Check(left * ParseUnary(out _), token.Position);
+            }
+            else if (token.Kind == TokenKind.Number)
+            {
+                var previous = _tokens[_pos - 1];
+                throw new CalcException(
+                    previous.Kind == TokenKind.Name
+                        ? $"\"{previous.Text}\" and {token.Text} need an operator between them"
+                        : "Two numbers need an operator between them",
+                    token.Position);
+            }
+            else
+            {
+                return left;
+            }
         }
-        if (Peek.IsOperator('+'))
-        {
-            Next();
-            return ParseUnary();
-        }
-        return ParsePower();
     }
 
-    private double ParsePower()
+    private double ParseUnary(out bool isPercent)
     {
-        double baseValue = ParsePostfix();
+        // Every level of nesting passes through here. A depth limit keeps a pasted "((((…" from overflowing the stack,
+        // which would end the app rather than show an error.
+        if (++_depth > MaxDepth)
+            throw new CalcException("The expression is nested too deeply", Peek.Position);
+        try
+        {
+            if (Peek.IsOperator('-'))
+            {
+                Next();
+                return -ParseUnary(out isPercent);
+            }
+            if (Peek.IsOperator('+'))
+            {
+                Next();
+                return ParseUnary(out isPercent);
+            }
+            return ParsePower(out isPercent);
+        }
+        finally
+        {
+            _depth--;
+        }
+    }
+
+    private double ParsePower(out bool isPercent)
+    {
+        double baseValue = ParsePostfix(out isPercent);
         if (Peek.IsOperator('^'))
         {
             var op = Next();
-            double exponent = ParseUnary();
+            isPercent = false; // 2^50% is not "a percent of" anything
+            double exponent = ParseUnary(out _);
             if (baseValue == 0 && exponent < 0)
                 throw new CalcException("Cannot divide by zero", op.Position);
             double result = Math.Pow(baseValue, exponent);
@@ -160,19 +188,22 @@ public sealed class Evaluator
         return baseValue;
     }
 
-    private double ParsePostfix()
+    private double ParsePostfix(out bool isPercent)
     {
         double value = ParsePrimary();
+        isPercent = false;
         while (true)
         {
             if (Peek.IsOperator('%'))
             {
                 Next();
                 value /= 100;
+                isPercent = true;
             }
             else if (Peek.IsOperator('!'))
             {
                 value = Factorial(value, Next().Position);
+                isPercent = false;
             }
             else
             {
@@ -215,7 +246,7 @@ public sealed class Evaluator
                 }
                 else
                 {
-                    argument = ParseUnary(); // "sqrt 9", "sin 30"
+                    argument = ParseUnary(out _); // "sqrt 9", "sin 30"
                 }
                 return ApplyFunction(token, argument);
 
@@ -275,7 +306,8 @@ public sealed class Evaluator
             long quarter = (long)Math.Round(Math.IEEERemainder(x, 360) / 90);
             return quarter switch { 1 => 1, -1 => -1, _ => 0 };
         }
-        return Math.Sin(ToRadians(x));
+        // Reduce to one turn before converting, so large angles such as 3600030° stay exact.
+        return Math.Sin(_angleMode == AngleMode.Degrees ? Math.IEEERemainder(x, 360) * Math.PI / 180 : x);
     }
 
     private double Cosine(double x) => _angleMode == AngleMode.Degrees ? Sine(x + 90) : Math.Cos(x);
@@ -290,8 +322,6 @@ public sealed class Evaluator
     }
 
     private static bool IsMultipleOf(double x, double step) => Math.IEEERemainder(x, step) == 0;
-
-    private double ToRadians(double x) => _angleMode == AngleMode.Degrees ? x * Math.PI / 180 : x;
 
     private double FromRadians(double x) => _angleMode == AngleMode.Degrees ? x * 180 / Math.PI : x;
 

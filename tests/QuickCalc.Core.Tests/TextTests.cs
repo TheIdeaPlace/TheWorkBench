@@ -21,6 +21,9 @@ public class TextTests
     [InlineData("-2.5", "minus 2.5")]
     [InlineData("1e+20", "1 times 10 to the power 20")]
     [InlineData("-1.5e-12", "minus 1.5 times 10 to the power minus 12")]
+    [InlineData("1e0", "1 times 10 to the power 0")]
+    [InlineData("1e-00", "1 times 10 to the power 0")]
+    [InlineData("1e+05", "1 times 10 to the power 5")]
     public void SpeaksNumbers(string formatted, string expected) => Assert.Equal(expected, NumberFormatter.Speak(formatted));
 
     [Theory]
@@ -52,6 +55,33 @@ public class TextTests
     {
         string display = ExpressionText.ToDisplay(expression);
         Assert.Equal(expected, NumberFormatter.Format(Evaluator.Evaluate(display)));
+    }
+
+    [Theory]
+    [InlineData("ans*2", 10.0, "10 × 2")]
+    [InlineData("ans^2", -3.0, "(−3) ^ 2")]
+    [InlineData("2ans", 5.0, "2 (5)")]
+    [InlineData("ans pi", 5.0, "5 π")]
+    [InlineData("ans", 1e20, "(1e+20)")]
+    [InlineData("sqrt(16", null, "sqrt(16)")]
+    [InlineData("((1+2", null, "((1 + 2))")]
+    [InlineData("1+2)", null, "1 + 2)")] // a stray ")" is kept so the error still shows
+    public void DisplayTextShowsAnswerAndClosesParentheses(string expression, double? answer, string expected) =>
+        Assert.Equal(expected, ExpressionText.ToDisplay(expression, answer));
+
+    [Theory]
+    [InlineData("ans*2", 10.0)]
+    [InlineData("ans^2", -3.0)]
+    [InlineData("2ans", 5.0)]
+    [InlineData("2ans", -5.0)]
+    [InlineData("ans pi", 5.0)]
+    [InlineData("1/2ans", 4.0)]
+    [InlineData("ans!", 4.0)]
+    [InlineData("ans*1e5", 1e20)]
+    public void DisplayWithAnswerCalculatesTheSame(string expression, double answer)
+    {
+        string display = ExpressionText.ToDisplay(expression, answer);
+        Assert.Equal(Evaluator.Evaluate(expression, answer: answer), Evaluator.Evaluate(display), 12);
     }
 
     [Theory]

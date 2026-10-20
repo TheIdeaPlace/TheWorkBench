@@ -63,7 +63,38 @@ public class EvaluatorTests
     [InlineData("3sqrt(16)", "12")]
     [InlineData("2 e", "5.43656365691809")]
     [InlineData("2e", "5.43656365691809")]
+    [InlineData("1/2pi", "0.159154943091895")] // written-together multiplication binds tighter: 1/(2π)
+    [InlineData("6/2(1+2)", "1")]
+    [InlineData("-2pi", "-6.28318530717959")]
+    [InlineData("2^3pi", "25.1327412287183")] // (2^3)π
     public void ImpliedMultiplication(string expression, string expected) => Assert.Equal(expected, Calc(expression));
+
+    [Theory]
+    [InlineData("80+2^50%", "81.4142135623731")] // the % is inside the exponent, not a percent of 80
+    [InlineData("80+sqrt 16%", "80.4")]
+    [InlineData("80+sqrt(16%)", "80.4")]
+    [InlineData("80+2*15%", "80.3")]
+    [InlineData("80+15%pi", "80.4712388980385")] // implied multiplication: 15% × π
+    [InlineData("80+-15%", "68")]
+    [InlineData("80+3!%", "84.8")]
+    public void PercentOfLeftOnlyForAWholePercentOperand(string expression, string expected) => Assert.Equal(expected, Calc(expression));
+
+    [Theory]
+    [InlineData("sin(3600030)", "0.5")]
+    [InlineData("cos(3600060)", "0.5")]
+    [InlineData("sin(-3600030)", "-0.5")]
+    public void LargeDegreeAnglesStayExact(string expression, string expected) => Assert.Equal(expected, Calc(expression));
+
+    [Theory]
+    [InlineData(5000, '(')]
+    [InlineData(5000, '-')]
+    [InlineData(300, '(')]
+    public void DeepNestingIsAnErrorNotACrash(int count, char repeated)
+    {
+        string expression = new string(repeated, count) + "1";
+        var ex = Assert.Throws<CalcException>(() => Evaluator.Evaluate(expression));
+        Assert.Equal("The expression is nested too deeply", ex.Message);
+    }
 
     [Theory]
     [InlineData("1e3", "1000")]
@@ -145,6 +176,8 @@ public class EvaluatorTests
     [InlineData("()", "Expected a number before the closing parenthesis", 1)]
     [InlineData("2 3", "Two numbers need an operator between them", 2)]
     [InlineData("(2)3", "Two numbers need an operator between them", 3)]
+    [InlineData("e2", "\"e\" and 2 need an operator between them", 1)]
+    [InlineData("ans2", "\"ans\" and 2 need an operator between them", 3)]
     [InlineData("1.2.3", "A number can only have one decimal point", 3)]
     [InlineData("5+.", "A decimal point needs a digit after it", 2)]
     [InlineData("foo(2)", "\"foo\" is not a name QuickCalc knows", 0)]

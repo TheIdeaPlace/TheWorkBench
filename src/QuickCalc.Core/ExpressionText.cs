@@ -29,19 +29,27 @@ public static class ExpressionText
 
     /// <summary>
     /// Display form with spaced binary operators and the symbols × ÷ − π, e.g. "12 × (3 − 1)".
-    /// Screen readers say these symbols as "times", "divided by" and "minus". Returns the input unchanged if it can't be read.
+    /// Screen readers say these symbols as "times", "divided by" and "minus". Closing parentheses that were left off
+    /// at the end are added. When <paramref name="answer"/> is given, "ans" is shown as that number, so a calculation
+    /// recalled from history gives the same result later. Returns the input unchanged if it can't be read.
     /// </summary>
-    public static string ToDisplay(string expression)
+    public static string ToDisplay(string expression, double? answer = null)
     {
         if (!TryTokenize(expression, out var tokens))
             return expression.Trim();
 
         var sb = new StringBuilder();
         Token? previous = null;
+        int openParens = 0;
         foreach (var token in tokens)
         {
             if (token.Kind == TokenKind.End)
                 break;
+            if (token.Kind == TokenKind.OpenParen)
+                openParens++;
+            else if (token.Kind == TokenKind.CloseParen && openParens > 0)
+                openParens--;
+
             bool binary = token.Kind == TokenKind.Operator && token.Text is "+" or "-" or "*" or "/" or "^" && !IsUnary(token, previous);
             if (sb.Length > 0 && (binary || NeedsSpaceBefore(token, previous!)))
                 sb.Append(' ');
@@ -49,13 +57,26 @@ public static class ExpressionText
             {
                 TokenKind.Operator => token.Text switch { "*" => "×", "/" => "÷", "-" => "−", _ => token.Text },
                 TokenKind.Name when token.Text == "pi" => "π",
+                TokenKind.Name when token.Text == "ans" && answer is double value => AnswerText(value, previous),
                 _ => token.Text,
             });
             if (binary)
                 sb.Append(' ');
             previous = token;
         }
+        sb.Append(')', openParens);
         return sb.ToString();
+    }
+
+    // Parentheses keep the meaning: "ans^2" with ans = −3 is (−3)^2, and "2ans" with ans = 5 is 2 (5), not "2 5".
+    private static string AnswerText(double answer, Token? previous)
+    {
+        string text = NumberFormatter.Format(answer);
+        bool impliedMultiplication = previous is not null &&
+            (previous.Kind is TokenKind.Number or TokenKind.Name or TokenKind.CloseParen || previous.IsOperator('%') || previous.IsOperator('!'));
+        if (text.StartsWith('-'))
+            return "(−" + text[1..] + ")";
+        return impliedMultiplication || text.Contains('e') ? "(" + text + ")" : text;
     }
 
     /// <summary>Words for an announcement, e.g. "12 times open paren 3 minus 1 close paren". "Empty" for blank input.</summary>
