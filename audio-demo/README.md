@@ -9,7 +9,10 @@ on your own PC. Windows Narrator, with the Microsoft Zira voice, read QuickMail 
 VM. The approach follows Quill's podcast pipeline (`docs/podcast/` in
 [Community-Access/quill](https://github.com/Community-Access/quill)).
 
-It's built to be driven by Claude Code through the `audio-demo` skill, together with
+The same rig also tests apps: the `sr-test` skill drives an app with NVDA (or Narrator), takes
+NVDA's own log of what it said, and checks it against the expected speech for each key press.
+
+It's built to be driven by Claude Code through the `audio-demo` and `sr-test` skills, together with
 [vmtest](../vmtest/) for the VM.
 
 ## Install
@@ -29,10 +32,14 @@ do.
 
 | | |
 |---|---|
-| `skill\SKILL.md` | The Claude Code skill: the whole flow, and what goes wrong |
+| `skill\SKILL.md` | The audio-demo skill: the whole flow, and what goes wrong |
+| `sr-test-skill\SKILL.md` | The sr-test skill: screen reader speech tests with expected speech |
 | `skill\references\quickmail.md` | App-specific notes from the QuickMail demo, a model for other apps |
-| `tools\setup-rig.ps1` | Turns a vmtest VM into a recording rig: VB-Audio Virtual Cable, ffmpeg, Narrator's voice |
-| `tools\clip.ps1` | Records one demo clip in the VM from a steps file, brings it back, transcribes it |
+| `tools\setup-rig.ps1` | Turns a vmtest VM into a recording rig: VB-Audio Virtual Cable, ffmpeg, and Narrator or NVDA (`-ScreenReader`) |
+| `tools\clip.ps1` | Records one clip in the VM from a steps file, brings it back with what was said (NVDA's log, or Whisper) |
+| `tools\speechlog.py` | Reads NVDA's log: every utterance as text, timed against a clip's key presses |
+| `tools\srcheck.py` | Checks what was said against a steps file's expectations; writes a report, or a baseline |
+| `tools\test_srcheck.py` | Self-tests for the NVDA log parser and the checker (no VM or models needed) |
 | `tools\produce.py` | Builds the MP3 from the script, the host voices and the clips, with chapters, and optionally a transcript |
 | `tools\test_produce.py` | Self-tests for the clip-start check, script parsing and chapter metadata (no models needed) |
 | `tools\transcribe.py` | Whisper transcripts, to check what the screen reader said |
@@ -40,6 +47,7 @@ do.
 | `tools\VmFiles.psm1` | Copies files out of the VM, which vmtest's `push` can't do in reverse |
 | `vm\demo.ps1` | Runs in the VM: records the audio cable while sending the keys |
 | `vm\install-vbcable.ps1` | Runs in the VM: installs the virtual audio cable silently |
+| `vm\install-nvda.ps1` | Runs in the VM: installs NVDA silently, after checking its signature |
 | `templates\` | A starting script and an example steps file |
 
 ## Why a virtual audio cable
