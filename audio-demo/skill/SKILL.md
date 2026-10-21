@@ -138,7 +138,10 @@ headings, each host line from the script, and each demo as Whisper hears it afte
 speech is still sounding there, it's leftover from an earlier announcement, and it gets silenced up
 to the next gap, so the demo doesn't open on a stray fragment ("...quarter."). The build log names
 every clip it changed. A `WARNING` means speech ran straight through the first key with no gap.
-Listen to that clip's start, or re-record it with a longer wait before the first key.
+Listen to that clip's start, or re-record it with a longer wait before the first key. The check
+relies on the virtual cable recording digital silence between utterances. Anything above about
+-60 dBFS counts as speech. A clip recorded another way, such as RDP audio or a real sound card
+with background noise, would read as speech throughout, so check those starts by ear.
 
 Clips recorded before key logs had a `start` entry only have a guessed capture lag. For those, a
 sound that began at most 0.3 s before the cut is taken to be the answer to the first key, cut into

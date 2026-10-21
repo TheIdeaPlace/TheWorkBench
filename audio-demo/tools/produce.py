@@ -62,7 +62,9 @@ def data_dir() -> Path:
     return Path(os.environ.get("AUDIODEMO_DATA") or Path(os.environ["LOCALAPPDATA"]) / "audio-demo")
 
 
-DIRECTIVE = re.compile(r"^#(voice|speed|title|pause|chapter)\s+(.*)$")   # no space after '#': '# voice ...' is a comment
+# Any case, so '#Chapter Foo' isn't silently dropped as a comment. No space after '#': '# voice ...'
+# is a comment.
+DIRECTIVE = re.compile(r"^#(voice|speed|title|pause|chapter)\s+(.*)$", re.I)
 MARKER = re.compile(r"^\[([A-Z][A-Z0-9_]*)(?:\s+([\w.-]+))?\]$")
 
 
@@ -91,7 +93,7 @@ def parse(text: str):
                 raise SystemExit(f"line {n}: '#chapter' needs a title, e.g. #chapter Search")
             d = DIRECTIVE.match(t)
             if d:
-                key, value = d.group(1), d.group(2).strip()
+                key, value = d.group(1).lower(), d.group(2).strip()
                 if key == "voice":
                     parts = value.split()
                     if len(parts) != 2:
@@ -506,6 +508,27 @@ def ffmetadata(chapters, total: float) -> str:
     return "\n".join(lines) + "\n"
 
 
+# Whisper's standard fallback: retry a window at higher temperature when its output is too
+# repetitive (compression ratio) or unlikely. With temperature 0 alone, a clip that opens on a short
+# phrase came back as that phrase 37 times over.
+WHISPER_TEMPERATURES = [0.0, 0.2, 0.4, 0.6, 0.8]
+
+
+def looping(text: str, repeats: int = 10) -> bool:
+    """True if some phrase of 1-8 words occurs `repeats` or more times in a row.
+
+    A screen reader really does repeat itself ("moved up" six times for six presses of alt up arrow,
+    in the QuickMail demo), so only a run longer than that is flagged. Whisper's loops run to dozens.
+    """
+    words = re.findall(r"[\w']+", text.lower())
+    for n in range(1, 9):
+        for i in range(len(words) - n * repeats + 1):
+            phrase = words[i:i + n]
+            if all(words[i + k * n:i + (k + 1) * n] == phrase for k in range(1, repeats)):
+                return True
+    return False
+
+
 def write_transcript(path: Path, meta, events, chapters, mp3_name: str):
     """Chapter headings, host lines from the script (exact), demos as Whisper hears them."""
     from faster_whisper import WhisperModel   # only needed here; installed by install.ps1
@@ -521,13 +544,19 @@ def write_transcript(path: Path, meta, events, chapters, mp3_name: str):
             ci += 1
         if kind == "DEMO":
             # Same settings as transcribe.py: VAD and no conditioning keep Whisper from looping on
-            # the long silences. The audio is the trimmed clip, as in the MP3 before final levelling.
+            # the long silences, and the temperature fallback retries a window whose output repeats
+            # itself. The audio is the trimmed clip, as in the MP3 before final levelling.
             pcm = subprocess.run(["ffmpeg", "-loglevel", "error", "-f", "f32le", "-ar", str(SR), "-ac", "1",
                                   "-i", "-", "-f", "f32le", "-ar", "16000", "-ac", "1", "-"],
                                  input=payload.astype(np.float32).tobytes(), capture_output=True, check=True).stdout
             segs, _ = model.transcribe(np.frombuffer(pcm, np.float32), language="en", beam_size=5,
-                                       temperature=0, vad_filter=True, condition_on_previous_text=False)
-            text = " ".join(s.text.strip() for s in segs) or "(no speech recognized; listen to this demo)"
+                                       temperature=WHISPER_TEMPERATURES, vad_filter=True,
+                                       condition_on_previous_text=False)
+            text = " ".join(s.text.strip() for s in segs)
+            if not text:
+                text = "(no speech recognized; listen to this demo)"
+            elif looping(text):
+                text += " (possible recognition loop; listen to this demo)"
             lines.append(f"[Demo, {clock(t)}] {text}")
         else:
             lines.append(f"{kind.title()}: {' '.join(payload.split())}")

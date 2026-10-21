@@ -173,6 +173,21 @@ def test_timeline_chapters():
     assert len(marks) == 1 and marks[0][0] == "d1"
 
 
+def test_directives_any_case():
+    meta, segs = p.parse("#Voice A af_heart\n#PAUSE 2\n#Chapter Search\n[A]\nHi.\n")
+    assert meta["voices"] == {"A": "af_heart"} and meta["pause"] == 2.0
+    assert segs[0] == ("CHAPTER", "Search"), segs
+
+
+def test_looping():
+    loop = "Command Palette Window, Filter " * 37        # the real loop from the QuickMail build
+    assert p.looping(loop)
+    assert p.looping("blank " * 12)
+    assert not p.looping("Unread. Attachments. Mia Rivera. Photos from the lake. The kids loved the canoe.")
+    # six in a row is real screen reader speech: six presses of alt up arrow in the QuickMail demo
+    assert not p.looping("checked " + "moved up " * 6 + "position 3 of 9")
+
+
 def test_ffmetadata():
     text = p.ffmetadata([(0.0, "Intro"), (61.25, "Keys; = and #")], 120.0)
     assert text.startswith(";FFMETADATA1\n")
