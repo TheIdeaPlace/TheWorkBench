@@ -53,4 +53,6 @@ dotnet test tests/QuickCalc.Core.Tests
 dotnet test tests/QuickCalc.UiTests
 ```
 
-`QuickCalc.UiTests` launches the app and drives it through UI Automation, the same interface screen readers use, checking names, focus order, keyboard behavior, and the spoken announcements. It sends real keystrokes, so leave the machine alone for the half minute it takes. It won't send keys unless QuickCalc is in front.
+`QuickCalc.UiTests` launches the app and drives it through UI Automation, the same interface screen readers use, checking names, focus order, keyboard behavior, and the spoken announcements. It sends real keystrokes, so it belongs on a machine nobody is using: the `QuickCalc tests` workflow runs it on GitHub's machines for every change under `quickcalc/`, and [vmtest](../vmtest) can run it in a VM. If you do run it locally, leave the machine alone for the half minute it takes. It stops rather than send a key unless QuickCalc is the window in front.
+
+This is an experiment and part of [The WorkBench](../README.md); it may or may not see further development.

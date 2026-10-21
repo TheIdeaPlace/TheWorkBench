@@ -1,9 +1,21 @@
-name: CI
+name: QuickCalc tests
+
+# Builds QuickCalc and runs its engine tests and its UI Automation tests on GitHub's machines.
+# The UI tests launch the app and send real keystrokes, which is no good on a machine where
+# somebody is working or listening to a screen reader, so this is where they belong.
+#
+# Scoped by path so other projects in this repo do not trigger a QuickCalc run, and vice versa.
 
 on:
   push:
     branches: [main]
+    paths:
+      - 'quickcalc/**'
+      - '.github/workflows/quickcalc-tests.yml'
   pull_request:
+    paths:
+      - 'quickcalc/**'
+      - '.github/workflows/quickcalc-tests.yml'
 
 permissions:
   contents: read
@@ -12,6 +24,9 @@ jobs:
   build-and-test:
     runs-on: windows-latest
     timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: quickcalc
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
@@ -27,5 +42,5 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: test-results
-          path: TestResults
+          name: quickcalc-test-results
+          path: quickcalc/TestResults
