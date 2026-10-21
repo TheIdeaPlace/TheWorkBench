@@ -138,8 +138,13 @@ headings, each host line from the script, and each demo as Whisper hears it afte
 speech is still sounding there, it's leftover from an earlier announcement, and it gets silenced up
 to the next gap, so the demo doesn't open on a stray fragment ("...quarter."). The build log names
 every clip it changed. A `WARNING` means speech ran straight through the first key with no gap.
-Listen to that clip's start, or re-record it with a longer wait before the first key. Then check
-the result:
+Listen to that clip's start, or re-record it with a longer wait before the first key.
+
+Clips recorded before key logs had a `start` entry only have a guessed capture lag. For those, a
+sound that began at most 0.3 s before the cut is taken to be the answer to the first key, cut into
+by a lag that was guessed too small. The clip then starts just before that sound, and its clicks
+move to match. In a transcript, a demo's time is where its audio starts, about 1.2 s after the
+demo time in the build log, which is before the chime. Then check the result:
 
 - Transcribe the whole MP3 (`transcribe.py`), or use `--transcript`, and read it against the
   script.

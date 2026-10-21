@@ -50,6 +50,8 @@ SAME_SPEAKER_GAP, SPEAKER_CHANGE_GAP, DEFAULT_PAUSE = 0.18, 0.32, 1.8
 CHAPTER_LEAD = 0.3                             # a chapter starts this far before its first sound, in silence
 QUIET = 1e-3                                   # about -60 dBFS: the virtual cable gives digital silence
                                                # between utterances, so anything above this is speech
+MUTE_LIMIT = 0.25                              # silence leftover speech no further than this past the first key
+LEGACY_MISS = 0.3                              # older logs: how far a guessed lag may have cut into an answer
 DEMO_LEAD, DEMO_TAIL = 0.45, 0.6               # silence around a demo, inside the chimes
 MAX_SILENCE, KEEP_HEAD, KEEP_TAIL = 1.1, 0.30, 0.45   # pause shortening inside clips
 CAPTURE_LAG = 0.35                             # ffmpeg starts a moment after the key stopwatch
@@ -73,6 +75,7 @@ def parse(text: str):
     """
     meta = {"voices": {}, "speed": DEFAULT_SPEED, "title": "", "pause": DEFAULT_PAUSE}
     segs, cur, buf = [], None, []
+    chapter_line = 0
 
     def flush():
         if buf:
@@ -84,6 +87,8 @@ def parse(text: str):
         if not t:
             continue
         if t.startswith("#"):
+            if re.match(r"^#chapter\s*$", t, re.I):
+                raise SystemExit(f"line {n}: '#chapter' needs a title, e.g. #chapter Search")
             d = DIRECTIVE.match(t)
             if d:
                 key, value = d.group(1), d.group(2).strip()
@@ -93,16 +98,22 @@ def parse(text: str):
                         raise SystemExit(f"line {n}: '#voice' takes a host name and a Kokoro voice, e.g. #voice MICHAEL am_michael")
                     meta["voices"][parts[0].upper()] = parts[1]
                 elif key in ("speed", "pause"):
+                    example = "#speed 1.03" if key == "speed" else "#pause 1.8"
                     try:
                         meta[key] = float(value)
                     except ValueError:
-                        example = "#speed 1.03" if key == "speed" else "#pause 1.8"
                         raise SystemExit(f"line {n}: '#{key}' needs a number, e.g. {example}")
+                    if not 0 < meta[key] <= 10:
+                        raise SystemExit(f"line {n}: '#{key} {value}' is out of range, e.g. {example}")
                 elif key == "chapter":
                     # Positional: the chapter starts where this line sits. It also ends the current
                     # host turn, so text after it needs a [HOST] marker again.
                     flush()
+                    if segs and segs[-1][0] == "CHAPTER":
+                        raise SystemExit(f"line {n}: two #chapter lines with nothing between them make an "
+                                         "empty chapter. Remove one.")
                     segs.append(("CHAPTER", value)); cur = None
+                    chapter_line = n
                 else:
                     meta["title"] = value
             continue
@@ -131,6 +142,13 @@ def parse(text: str):
         raise SystemExit("The script declares no hosts. Add lines like: #voice MICHAEL am_michael")
     if not any(s[0] in ("SAY", "DEMO") for s in segs):
         raise SystemExit("The script has no host turns or demos.")
+    chapters = [i for i, s in enumerate(segs) if s[0] == "CHAPTER"]
+    last_played = max(i for i, s in enumerate(segs) if s[0] in ("SAY", "DEMO"))
+    if chapters and chapters[-1] > last_played:
+        raise SystemExit(f"line {chapter_line}: this #chapter has nothing after it to play.")
+    if chapters and any(s[0] in ("SAY", "DEMO") for s in segs[:chapters[0]]):
+        print("  note: the first #chapter isn't at the top, so the opening isn't in any chapter. "
+              "Add a #chapter before the first line.", file=sys.stderr)
     return meta, segs
 
 
@@ -204,25 +222,35 @@ def check_start(speech: np.ndarray, first: float, key: float | None, measured: b
     """Make sure a clip doesn't open in the middle of a word.
 
     `first` is where the clip would start (just before the first logged key, at `key`). Returns
-    (start, mute_to, lag_shift, note): start the clip at `start`, silence the speech in
-    [start, mute_to) if mute_to is set, move the key clicks `lag_shift` seconds later in the
-    recording (0 normally), and report `note` in the build log ("" when nothing was wrong).
+    (start, mute_to, click_shift, note): start the clip at `start`, silence the speech in
+    [start, mute_to) if mute_to is set, move every key click by `click_shift` seconds (negative is
+    earlier; 0 normally), and report `note` in the build log ("" when nothing was wrong).
 
     - Measured logs (with a 'start' entry): the screen reader can't answer a key before it's
       pressed, so speech already sounding at the cut is leftover from earlier, usually a startup or
-      focus announcement. It's silenced up to the next gap, and the start, with its key click,
-      stays where it was. Without that, the listener heard a stray fragment ("...quarter.") before
-      the demo began.
+      focus announcement. All of it before the key is silenced, then up to the first gap of 20 ms
+      or more after the key, and the start, with its key click, stays where it was. Without that,
+      the listener heard a stray fragment ("...quarter.") before the demo began. A key cuts the
+      screen reader off almost at once, so nothing is silenced more than MUTE_LIMIT after the key:
+      if no gap comes by then, the answer may already be playing, and it reports a WARNING instead
+      of risking the answer.
     - Older logs use a guessed lag, which was sometimes too small, so the "leftover" can really be
-      the answer to the first key. If the sound began less than 0.5 s before the cut, treat it as
-      that answer and start just before it (re-timing the clicks to match); otherwise silence it as
-      leftover. This is what clipped "Unread" to "...read" in the first QuickMail demo.
+      the answer to the first key. If the sound began at most LEGACY_MISS before the cut, treat it
+      as that answer and start just before it, moving the clicks to match. Otherwise it's leftover,
+      silenced up to its first 50 ms pause (the key time is a guess, so before and after it can't
+      be told apart). The move-back is what fixed "Unread" clipped to "...read" in the first
+      QuickMail demo.
     """
     fl = int(0.01 * SR)
 
     def quiet(i, n=1):
-        return all(float(np.sqrt((speech[max(0, j):j + fl] ** 2).mean())) < QUIET if j < len(speech) else True
-                   for j in range(i, i + n * fl, fl))
+        """True if the n 10 ms frames from sample i are all below QUIET (outside the clip counts as quiet)."""
+        for j in range(i, i + n * fl, fl):
+            if j < 0 or j >= len(speech):
+                continue
+            if float(np.sqrt((speech[j:j + fl] ** 2).mean())) >= QUIET:
+                return False
+        return True
 
     i = int(first * SR)
     if i >= len(speech) or quiet(i):
@@ -231,17 +259,28 @@ def check_start(speech: np.ndarray, first: float, key: float | None, measured: b
     while b > 0 and not quiet(b - 5 * fl, 5):               # back to the start of this sound
         b -= fl
     began = (i - b) / SR
-    if not measured and began <= 0.5:
+    if not measured and began <= LEGACY_MISS:
         new = max(0.0, b / SR - 0.05)
         return new, None, new - first, (f"opened {began:.2f} s into the screen reader's first answer: "
-                                        f"started {first - new:.2f} s earlier, key clicks re-timed")
-    # Leftover speech: find where it stops (50 ms of quiet). It normally stops when the key is
-    # pressed, so give up 0.6 s after the key rather than silence the answer along with it.
-    limit = int(((key if key is not None else first) + 0.6) * SR)
+                                        f"started {first - new:.2f} s earlier, key clicks moved to match")
+    # Leftover speech: find where it stops.
+    # - Measured log: before the key nothing can be the answer yet, so all of it is leftover. After
+    #   the key the answer can follow within tens of milliseconds, so stop at the first 20 ms gap.
+    # - Older log: the key time is a guess, so "before" and "after" can't be told apart. Stop at the
+    #   first real pause (50 ms), which bridges the short gaps between words.
+    # Either way, give up MUTE_LIMIT past the key (plus LEGACY_MISS for a guessed key).
+    k = int((key if key is not None else first) * SR)
+    reach = MUTE_LIMIT + (0.0 if measured else LEGACY_MISS)
+    limit = min(len(speech), int((k / SR + reach) * SR))
     f = i
-    while f < min(limit, len(speech)) and not quiet(f, 5):
+    while f < limit:
+        if measured:
+            if f >= k and quiet(f, 2):
+                break
+        elif quiet(f, 5):
+            break
         f += fl
-    if f >= min(limit, len(speech)):
+    if f >= limit:
         return first, None, 0.0, ("WARNING: speech runs through the first key with no gap; the clip may "
                                   "open mid-word. Listen to its start, or re-record with a longer wait first")
     return first, f / SR, 0.0, f"silenced {(f - i) / SR:.2f} s of leftover speech at the start"
@@ -260,7 +299,7 @@ def demo_clip(clips: Path, name: str, host_rms: float) -> np.ndarray:
     first = max(0.0, (keys[0][0] - lag - 0.03) if keys else 0.0)
     if keys:
         first, mute_to, shift, note = check_start(speech, first, keys[0][0] - lag, rec_start is not None)
-        lag -= shift
+        lag -= shift          # clicks sit at (key - lag): a negative shift moves them earlier
         if mute_to is not None:
             a, z = int(first * SR), int(mute_to * SR)
             fade = min(z - a, int(0.01 * SR))
@@ -327,6 +366,12 @@ def main() -> int:
     proj = args.project.resolve()
     script = proj / args.script
     meta, segs = parse(script.read_text(encoding="utf-8"))
+    if args.transcript:
+        try:
+            import faster_whisper  # noqa: F401  (checked now, before a long build, not after it)
+        except ImportError:
+            raise SystemExit("--transcript needs faster-whisper in this Python environment. Run install.ps1, "
+                             "or build without --transcript.")
     out_dir, cache, clips = proj / "out", proj / "cache", proj / "clips"
     out_dir.mkdir(exist_ok=True); cache.mkdir(exist_ok=True)
 
@@ -361,59 +406,22 @@ def main() -> int:
     host = {i: say(s[1], s[2]) for i, s in enumerate(segs) if s[0] == "SAY"}
     host_rms = float(np.median([active_rms(a) for a in host.values()])) if host else 0.1
 
-    # pos is the running length in samples; sound_end is where the last host line or demo ended,
-    # so a chapter can start in the silence before its first sound without reaching back into it.
-    timeline, prev, marks, pos, sound_end = [silence(0.5)], None, [], int(0.5 * SR), 0
-    chapters, pending, events = [], [], []   # events: (seconds, kind, text) for the transcript
-
-    def add(x):
-        nonlocal pos
-        timeline.append(x)
-        pos += len(x)
-
-    def open_chapters(at):
-        for title in pending:
-            # Nothing has been heard yet: the first chapter starts at the very beginning.
-            chapters.append((0.0 if sound_end == 0 else max(sound_end / SR, at / SR - CHAPTER_LEAD), title))
-        pending.clear()
-
-    for i, s in enumerate(segs):
-        if s[0] == "SAY":
-            if prev is not None:
-                add(silence(SAME_SPEAKER_GAP if prev == s[1] else SPEAKER_CHANGE_GAP))
-            open_chapters(pos)
-            events.append((pos / SR, s[1], s[2]))
-            add(host[i]); prev = s[1]; sound_end = pos
-        elif s[0] == "PAUSE":
-            add(silence(meta["pause"])); prev = None
-        elif s[0] == "CHAPTER":
-            pending.append(s[1])
-        else:
-            clip = demo_clip(clips, s[1], host_rms)
-            start = pos / SR
-            add(silence(0.4))
-            open_chapters(pos)
-            add(chime(True)); add(silence(DEMO_LEAD))
-            events.append((pos / SR, "DEMO", clip))
-            add(clip); add(silence(DEMO_TAIL)); add(chime(False)); sound_end = pos; add(silence(0.4))
-            marks.append((s[1], start, len(clip) / SR)); prev = None
-    open_chapters(pos)          # a #chapter after the last line: start it at the end, harmlessly
-    add(silence(1.0))
-    mix = np.concatenate(timeline)
-    mix /= max(1.0, float(np.abs(mix).max()) / 0.95)
+    mix, marks, chapters, events = build_timeline(
+        segs, host, lambda nm: demo_clip(clips, nm, host_rms), meta["pause"])
     total = len(mix) / SR
 
     name = args.out or (Path(args.script).stem + ".mp3")
     wav = out_dir / (Path(name).stem + ".wav")
     sf.write(wav, mix, SR)
     mp3 = out_dir / name
-    inputs, maps = ["-i", str(wav)], ["-map", "0:a"]
+    # ID3v2.3 always (ffmpeg's default is 2.4): the widest player support, chapters or not.
+    inputs, maps = ["-i", str(wav)], ["-map", "0:a", "-id3v2_version", "3"]
     tags = ["-metadata", f"title={meta['title']}"] if meta["title"] else []
     if chapters:
         meta_file = out_dir / (Path(name).stem + ".chapters.txt")
         meta_file.write_text(ffmetadata(chapters, total), encoding="utf-8")
         inputs += ["-i", str(meta_file)]
-        maps += ["-map_chapters", "1", "-id3v2_version", "3"]   # ID3v2.3 CHAP frames: the widest player support
+        maps += ["-map_chapters", "1"]
     subprocess.run(["ffmpeg", "-y", "-loglevel", "error", *inputs, *maps,
                     "-af", "loudnorm=I=-16:TP=-1.5:LRA=11", "-ar", "44100", "-ac", "1",
                     "-codec:a", "libmp3lame", "-b:a", "128k", *tags, str(mp3)], check=True)
@@ -431,6 +439,55 @@ def main() -> int:
         print(out_txt)
     print(mp3)
     return 0
+
+
+def build_timeline(segs, host, clip_for, pause):
+    """Lay the script out in time. Returns (mix, marks, chapters, events).
+
+    host: {segment index: rendered host line}; clip_for(name) -> the prepared demo clip.
+    marks: (demo name, start s, length s), where start is before the demo's chime.
+    chapters: (start s, title). Each starts CHAPTER_LEAD before its first sound, but never before
+    the end of the previous sound, so it always lands in silence; the first one, with nothing
+    heard before it, starts at 0.
+    events: (start s, speaker or "DEMO", text or clip audio) for the transcript, in order.
+    """
+    timeline, prev, marks, pos, sound_end = [silence(0.5)], None, [], int(0.5 * SR), 0
+    chapters, pending, events = [], [], []
+
+    def add(x):
+        nonlocal pos
+        timeline.append(x)
+        pos += len(x)
+
+    def open_chapters(at):
+        for title in pending:
+            chapters.append((0.0 if sound_end == 0 else max(sound_end / SR, at / SR - CHAPTER_LEAD), title))
+        pending.clear()
+
+    for i, s in enumerate(segs):
+        if s[0] == "SAY":
+            if prev is not None:
+                add(silence(SAME_SPEAKER_GAP if prev == s[1] else SPEAKER_CHANGE_GAP))
+            open_chapters(pos)
+            events.append((pos / SR, s[1], s[2]))
+            add(host[i]); prev = s[1]; sound_end = pos
+        elif s[0] == "PAUSE":
+            add(silence(pause)); prev = None
+        elif s[0] == "CHAPTER":
+            pending.append(s[1])
+        else:
+            clip = clip_for(s[1])
+            start = pos / SR
+            add(silence(0.4))
+            open_chapters(pos)
+            add(chime(True)); add(silence(DEMO_LEAD))
+            events.append((pos / SR, "DEMO", clip))
+            add(clip); add(silence(DEMO_TAIL)); add(chime(False)); sound_end = pos; add(silence(0.4))
+            marks.append((s[1], start, len(clip) / SR)); prev = None
+    add(silence(1.0))
+    mix = np.concatenate(timeline)
+    mix /= max(1.0, float(np.abs(mix).max()) / 0.95)
+    return mix, marks, chapters, events
 
 
 def clock(t: float) -> str:
@@ -453,16 +510,18 @@ def write_transcript(path: Path, meta, events, chapters, mp3_name: str):
     """Chapter headings, host lines from the script (exact), demos as Whisper hears them."""
     from faster_whisper import WhisperModel   # only needed here; installed by install.ps1
     model = WhisperModel("small.en", device="cpu", compute_type="int8")
-    lines = [meta["title"] or "Transcript", "Transcript", f"Times are positions in {mp3_name}.",
-             "Demo lines are automatic speech recognition of the screen reader: check them before publishing.", ""]
+    lines = ([meta["title"]] if meta["title"] else []) + [
+        "Transcript", f"Times are positions in {mp3_name}; a demo's time is where its audio starts, after the chime.",
+        "Demo lines are automatic speech recognition of the screen reader: check them before publishing.", ""]
     ci = 0
     for t, kind, payload in events:
-        while ci < len(chapters) and chapters[ci][0] <= t + 0.5:
+        # A chapter never starts after its first event, so this places each heading just before it.
+        while ci < len(chapters) and chapters[ci][0] <= t + 1e-6:
             lines += ["", f"== {chapters[ci][1]} ({clock(chapters[ci][0])}) ==", ""]
             ci += 1
         if kind == "DEMO":
             # Same settings as transcribe.py: VAD and no conditioning keep Whisper from looping on
-            # the long silences, and the audio is exactly what the listener hears in the MP3.
+            # the long silences. The audio is the trimmed clip, as in the MP3 before final levelling.
             pcm = subprocess.run(["ffmpeg", "-loglevel", "error", "-f", "f32le", "-ar", str(SR), "-ac", "1",
                                   "-i", "-", "-f", "f32le", "-ar", "16000", "-ac", "1", "-"],
                                  input=payload.astype(np.float32).tobytes(), capture_output=True, check=True).stdout
