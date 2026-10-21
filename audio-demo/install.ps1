@@ -6,9 +6,10 @@
 #   - a Python environment with Kokoro (the host voices) and faster-whisper (transcripts for checking),
 #     in %LOCALAPPDATA%\audio-demo\venv, outside OneDrive and outside this repository;
 #   - the Kokoro v1.0 model and its 54 voices, in %LOCALAPPDATA%\audio-demo\models (about 340 MB);
-#   - the Claude Code skill, in %USERPROFILE%\.claude\skills\audio-demo (left alone if one is already
-#     there, since you may have personalised it; -Force replaces it);
-#   - AUDIODEMO_HOME, pointing at this folder, so the skill can find the tools.
+#   - the Claude Code skills, audio-demo (demos) and sr-test (speech tests), in
+#     %USERPROFILE%\.claude\skills (each left alone if already there, since you may have
+#     personalised it; -Force replaces them);
+#   - AUDIODEMO_HOME, pointing at this folder, so the skills can find the tools.
 # The VM side (sound device, ffmpeg, Narrator settings) is set up per task by tools\setup-rig.ps1.
 #
 # Needs: Python 3.12 for x64 (the pinned numpy has no wheels for 3.10 or 3.11; x64 Python also runs on
@@ -27,7 +28,7 @@ Write-Host ''
 Write-Host 'audio-demo installer'
 Write-Host "  tools:  $here"
 Write-Host "  data:   $DataDir"
-Write-Host "  skill:  $SkillsDir\audio-demo"
+Write-Host "  skills: $SkillsDir\audio-demo, $SkillsDir\sr-test"
 Write-Host ''
 
 # --- ffmpeg -----------------------------------------------------------------------------------
@@ -85,15 +86,19 @@ foreach ($f in $modelHashes.Keys) {
     }
 }
 
-# --- skill -------------------------------------------------------------------------------------
-$skillDest = Join-Path $SkillsDir 'audio-demo'
-if ((Test-Path (Join-Path $skillDest 'SKILL.md')) -and -not $Force) {
-    Write-Host 'skill: already installed - left alone (-Force replaces it)'
-} else {
-    Act 'install skill -> skills\audio-demo\SKILL.md'
-    if (-not $WhatIf) {
-        New-Item -ItemType Directory -Force $skillDest | Out-Null
-        Copy-Item (Join-Path $here 'skill\*') $skillDest -Recurse -Force
+# --- skills ------------------------------------------------------------------------------------
+# audio-demo (demos) and sr-test (speech tests) share these tools. Each is left alone if it's
+# already installed, since it may have been personalised; -Force replaces both.
+foreach ($skill in @(@{ Name = 'audio-demo'; Source = 'skill' }, @{ Name = 'sr-test'; Source = 'sr-test-skill' })) {
+    $skillDest = Join-Path $SkillsDir $skill.Name
+    if ((Test-Path (Join-Path $skillDest 'SKILL.md')) -and -not $Force) {
+        Write-Host "skill $($skill.Name): already installed - left alone (-Force replaces it)"
+    } else {
+        Act "install skill -> skills\$($skill.Name)\SKILL.md"
+        if (-not $WhatIf) {
+            New-Item -ItemType Directory -Force $skillDest | Out-Null
+            Copy-Item (Join-Path $here "$($skill.Source)\*") $skillDest -Recurse -Force
+        }
     }
 }
 

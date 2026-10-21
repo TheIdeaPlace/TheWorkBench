@@ -6,13 +6,21 @@ description: Produce an audio demo (a podcast-style MP3) of a Windows app — tw
 # Audio demos with AI hosts and real screen reader recordings
 
 The result is one MP3: two AI hosts (Kokoro, a free on-device neural voice engine) explaining an
-app, with clips in between of a real screen reader (Windows Narrator) reading the real app as keys
-are pressed. The recording happens in a vmtest VM, never on the user's PC. The pipeline follows
-the one Quill used for its podcast (`docs/podcast/` in Community-Access/quill).
+app, with clips in between of a real screen reader reading the real app as keys are pressed: Windows
+Narrator or NVDA. The recording happens in a vmtest VM, never on the user's PC. The pipeline
+follows the one Quill used for its podcast (`docs/podcast/` in Community-Access/quill). The sister
+skill **sr-test** uses the same rig and tools to check speech against expectations.
 
 **Never claim to know how something sounds.** You can't hear the result. Everything you say
-about speech comes from Whisper transcripts of the recordings and from audio level measurements.
-Ask the person to listen, and say exactly what to listen for.
+about speech comes from NVDA's own speech log (exact text), from Whisper transcripts of the
+recordings (Narrator), and from audio level measurements. Ask the person to listen, and say
+exactly what to listen for.
+
+**Choosing the screen reader.** Use the one the person asks for. With NVDA, each clip also gets
+`clips\<name>.speech.txt`, NVDA's log of exactly what it said. Host lines can then quote it
+word for word, and the transcript uses it instead of Whisper. NVDA and Narrator word things
+differently ("Email accounts list" against "email accounts, work, disconnected"), so a script
+written for one screen reader's clips must be checked line by line against the other's.
 
 ## Where things are
 
@@ -42,11 +50,18 @@ a minute, and demos are usually 25–60 seconds each.
 ### 2. Set up
 
 1. `vmtest begin` from the app's repo, on the task's branch.
-2. `powershell -File "$env:AUDIODEMO_HOME\tools\setup-rig.ps1"`, from the same repo. It installs
-   VB-Audio Virtual Cable (the VM has no sound device, so without it Narrator says nothing), copies
-   ffmpeg in, sets Narrator's voice, turns off character echo, starts Narrator, and finishes by
-   recording Narrator announcing Notepad opening. Check that the transcript has words in it, and
-   that the pitch matches the voice: Zira about 180 Hz, David and Mark about 100–130 Hz.
+2. `powershell -File "$env:AUDIODEMO_HOME\tools\setup-rig.ps1" [-ScreenReader NVDA]`, from the same
+   repo.
+   - **Common to both:** it installs VB-Audio Virtual Cable (the VM has no sound device, so without
+     it a screen reader says nothing) and copies ffmpeg in.
+   - **Narrator (the default):** it sets Narrator's voice and turns off character echo.
+   - **NVDA:** it installs the pinned NVDA release silently, and seeds its settings so there's no
+     welcome dialog, no usage-statistics question and no update check. Typing is echoed as words,
+     and the voice is NVDA's default. NVDA runs with its speech log on.
+
+   It finishes by recording the screen reader announcing Notepad opening. Check that what it said
+   is shown, and that the pitch matches the voice: Zira about 180 Hz; David, Mark and NVDA's
+   default voice about 95–130 Hz. Run it again with the other `-ScreenReader` to switch.
 3. Build the app for the VM's architecture (the pool may be ARM64), `vmtest deploy` it, and seed
    **realistic** demo data: names people would have, ordinary subjects, today's dates. Test
    fixtures are written to break layouts and sound absurd read aloud. Keep a pristine copy of the
@@ -68,8 +83,11 @@ Write `steps\<name>.steps` (format in `templates\example.steps`), then:
 powershell -File "$env:AUDIODEMO_HOME\tools\clip.ps1" -Project <folder> -Name d03-search -App <ProcessName>
 ```
 
-It records, copies the clip back, and prints a transcript. Read the transcript every time.
-Re-record until it says what the script will claim it says.
+It records, copies the clip back, and prints what the screen reader said: NVDA's own log, or a
+Whisper transcript for Narrator. Read it every time. Re-record until it says what the script will
+claim it says. Expectation lines (`e …`, see the sr-test skill) can sit in a demo's steps file. A
+demo ignores them, and `srcheck.py` checks them, which is a quick way to confirm a re-take still
+says what the script quotes.
 
 - **Waits:** after each key, wait long enough for the screen reader to finish (a message-list row
   takes 6–10 s). A key pressed while it's talking interrupts it, which is realistic for a quick
@@ -132,7 +150,9 @@ for each logged key (kept even through pauses that are shortened) and a chime ar
 normalizes to -16 LUFS. It stops with a line number on anything in the script it doesn't
 understand, and warns about a silent clip. With `#chapter` lines, it writes the chapters into the
 MP3 and prints the chapter list. `--transcript` writes `out\<name>-transcript.txt`, with chapter
-headings, each host line from the script, and each demo as Whisper hears it after trimming.
+headings, each host line from the script, and each demo. Demos come from NVDA's speech log where
+the clip has one (marked "logged", and exact), otherwise as Whisper hears them after trimming
+(marked "heard").
 
 **Clip starts are checked automatically.** A clip starts just before its first logged key. If
 speech is still sounding there, it's leftover from an earlier announcement, and it gets silenced up

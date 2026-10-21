@@ -2,19 +2,23 @@
 #
 #   powershell -File clip.ps1 -Project <folder> -Name d01-orient [-App QuickMail]
 #               [-Launch 'C:\vmtest\apps\QuickMail\QuickMail.exe'] [-LaunchArgs '--profileDir C:\vmtest\demo-profile']
-#               [-NoTranscribe]
+#               [-NoTranscribe] [-Whisper]
 #
 # Reads <Project>\steps\<Name>.steps, runs it in the VM with vm\demo.ps1 while recording the virtual
-# audio cable, copies <Name>.wav and <Name>.keys.txt into <Project>\clips, then prints a Whisper
-# transcript so you can check what the screen reader said. Run it from the git repo whose vmtest
-# task holds the VM, as with vmtest itself.
+# audio cable, copies <Name>.wav and <Name>.keys.txt into <Project>\clips, then shows what the
+# screen reader said:
+#   - NVDA (running in the VM, set up by setup-rig.ps1 -ScreenReader NVDA): its own log of every
+#     utterance, exact, saved as <Name>.speech.txt. -Whisper also transcribes the audio.
+#   - Narrator: a Whisper transcript of the audio (Narrator keeps no log of what it says).
+# Run it from the git repo whose vmtest task holds the VM, as with vmtest itself.
 param(
     [Parameter(Mandatory)][string]$Project,
     [Parameter(Mandatory)][string]$Name,
     [string]$App = '',
     [string]$Launch = '',
     [string]$LaunchArgs = '',
-    [switch]$NoTranscribe
+    [switch]$NoTranscribe,
+    [switch]$Whisper
 )
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'VmFiles.psm1') -Force -DisableNameChecking
@@ -44,12 +48,36 @@ Copy-FromTestVM "C:\vmtest\rec\$Name.wav" (Join-Path $clips "$Name.wav")
 Copy-FromTestVM "C:\vmtest\rec\$Name.keys.txt" (Join-Path $clips "$Name.keys.txt")
 Invoke-VmTest focused | Select-Object -Last 1
 
-if (-not $NoTranscribe) {
-    $data = if ($env:AUDIODEMO_DATA) { $env:AUDIODEMO_DATA } else { Join-Path $env:LOCALAPPDATA 'audio-demo' }
+$data = if ($env:AUDIODEMO_DATA) { $env:AUDIODEMO_DATA } else { Join-Path $env:LOCALAPPDATA 'audio-demo' }
+$py = Join-Path $data 'venv\Scripts\python.exe'
+
+# NVDA logs what it says; take this clip's part of that log as text.
+$nvda = Invoke-InTestVM '[bool](Get-Process nvda -ErrorAction SilentlyContinue) -and (Test-Path C:\vmtest\rec\nvda.log)'
+if ($nvda) {
+    $log = Join-Path $env:TEMP "audio-demo-nvda-$Name.log"
+    # NVDA keeps its log open without letting a plain copy read it, so snapshot it in the VM with a
+    # read that shares the file, then bring the snapshot back.
+    Invoke-InTestVM @'
+$in = [IO.File]::Open('C:\vmtest\rec\nvda.log', 'Open', 'Read', 'ReadWrite, Delete')
+try { $out = [IO.File]::Create('C:\vmtest\rec\nvda-snapshot.log'); try { $in.CopyTo($out) } finally { $out.Close() } } finally { $in.Close() }
+'@ | Out-Null
+    Copy-FromTestVM 'C:\vmtest\rec\nvda-snapshot.log' $log
+    $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    & $py -I (Join-Path $PSScriptRoot 'speechlog.py') $log (Join-Path $clips "$Name.keys.txt") (Join-Path $clips "$Name.speech.txt") 2>&1 |
+        Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] }
+    $code = $LASTEXITCODE
+    $ErrorActionPreference = $prev
+    Remove-Item $log -ErrorAction SilentlyContinue
+    if ($code) { Write-Warning "Couldn't read NVDA's speech log (exit $code)." }
+} else {
+    Remove-Item (Join-Path $clips "$Name.speech.txt") -ErrorAction SilentlyContinue   # never keep a stale one
+}
+
+if (-not $NoTranscribe -and (-not $nvda -or $Whisper)) {
     # Windows PowerShell turns a native command's stderr into an error under 'Stop'; Whisper writes
     # progress and warnings there. Let it through, and judge success by the exit code instead.
     $ErrorActionPreference = 'Continue'
-    & (Join-Path $data 'venv\Scripts\python.exe') -I (Join-Path $PSScriptRoot 'transcribe.py') (Join-Path $clips "$Name.wav") 2>&1 |
+    & $py -I (Join-Path $PSScriptRoot 'transcribe.py') (Join-Path $clips "$Name.wav") 2>&1 |
         Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] }
     if ($LASTEXITCODE) { Write-Warning "Transcription failed (exit $LASTEXITCODE). The clip itself is in $clips." }
 }

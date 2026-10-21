@@ -215,7 +215,7 @@ def read_keys(path: Path):
             if len(parts) >= 2 and parts[0].isdigit():
                 if parts[1] == "start":
                     start = int(parts[0]) / 1000.0
-                else:
+                elif parts[1] in ("k", "t", "x"):   # skip 'clock', 'end' and anything newer
                     keys.append((int(parts[0]) / 1000.0, parts[1]))
     return keys, start
 
@@ -437,7 +437,7 @@ def main() -> int:
             print(f"  {clock(start)}  {title}")
     if args.transcript:
         out_txt = out_dir / (Path(name).stem + "-transcript.txt")
-        write_transcript(out_txt, meta, events, chapters, mp3.name)
+        write_transcript(out_txt, meta, events, chapters, mp3.name, clips)
         print(out_txt)
     print(mp3)
     return 0
@@ -483,7 +483,7 @@ def build_timeline(segs, host, clip_for, pause):
             add(silence(0.4))
             open_chapters(pos)
             add(chime(True)); add(silence(DEMO_LEAD))
-            events.append((pos / SR, "DEMO", clip))
+            events.append((pos / SR, "DEMO", (s[1], clip)))
             add(clip); add(silence(DEMO_TAIL)); add(chime(False)); sound_end = pos; add(silence(0.4))
             marks.append((s[1], start, len(clip) / SR)); prev = None
     add(silence(1.0))
@@ -529,13 +529,34 @@ def looping(text: str, repeats: int = 10) -> bool:
     return False
 
 
-def write_transcript(path: Path, meta, events, chapters, mp3_name: str):
-    """Chapter headings, host lines from the script (exact), demos as Whisper hears them."""
-    from faster_whisper import WhisperModel   # only needed here; installed by install.ps1
-    model = WhisperModel("small.en", device="cpu", compute_type="int8")
+def exact_speech(clips: Path, name: str) -> str | None:
+    """What the screen reader said during a demo, from its own log (NVDA), if the clip has one.
+
+    clips/<name>.speech.txt is written by clip.ps1 from NVDA's log. Only speech from the first
+    logged step on is in the clip, so earlier utterances (setup) are left out, as in the audio.
+    """
+    # python -I leaves this script's folder off sys.path, so put it back for the sibling module.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from speechlog import read_speech
+    f = clips / f"{name}.speech.txt"
+    if not f.exists():
+        return None
+    keys, rec_start = read_keys(clips / f"{name}.keys.txt")
+    first = keys[0][0] if keys else 0.0
+    return " ".join(text for t, text in read_speech(f) if t >= first - 0.05)
+
+
+def write_transcript(path: Path, meta, events, chapters, mp3_name: str, clips: Path | None = None):
+    """Chapter headings, host lines from the script (exact), and each demo: from the screen reader's
+    own log where there is one (NVDA, exact), otherwise as Whisper hears it."""
+    model = None
+    any_whisper = any(kind == "DEMO" and not (clips and (clips / f"{payload[0]}.speech.txt").exists())
+                      for _, kind, payload in events)
     lines = ([meta["title"]] if meta["title"] else []) + [
         "Transcript", f"Times are positions in {mp3_name}; a demo's time is where its audio starts, after the chime.",
-        "Demo lines are automatic speech recognition of the screen reader: check them before publishing.", ""]
+        ("Demo lines marked (heard) are automatic speech recognition of the screen reader: check them "
+         "before publishing. Lines marked (logged) are the screen reader's own record of what it said."
+         if any_whisper else "Demo lines are the screen reader's own record of what it said (its speech log)."), ""]
     ci = 0
     for t, kind, payload in events:
         # A chapter never starts after its first event, so this places each heading just before it.
@@ -543,6 +564,14 @@ def write_transcript(path: Path, meta, events, chapters, mp3_name: str):
             lines += ["", f"== {chapters[ci][1]} ({clock(chapters[ci][0])}) ==", ""]
             ci += 1
         if kind == "DEMO":
+            name, payload = payload
+            logged = exact_speech(clips, name) if clips else None
+            if logged is not None:
+                lines.append(f"[Demo, {clock(t)}, logged] {logged or '(nothing was said)'}")
+                continue
+            if model is None:
+                from faster_whisper import WhisperModel   # only needed here; installed by install.ps1
+                model = WhisperModel("small.en", device="cpu", compute_type="int8")
             # Same settings as transcribe.py: VAD and no conditioning keep Whisper from looping on
             # the long silences, and the temperature fallback retries a window whose output repeats
             # itself. The audio is the trimmed clip, as in the MP3 before final levelling.
@@ -557,7 +586,7 @@ def write_transcript(path: Path, meta, events, chapters, mp3_name: str):
                 text = "(no speech recognized; listen to this demo)"
             elif looping(text):
                 text += " (possible recognition loop; listen to this demo)"
-            lines.append(f"[Demo, {clock(t)}] {text}")
+            lines.append(f"[Demo, {clock(t)}, heard] {text}")
         else:
             lines.append(f"{kind.title()}: {' '.join(payload.split())}")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")

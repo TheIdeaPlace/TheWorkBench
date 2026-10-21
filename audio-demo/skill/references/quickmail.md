@@ -53,3 +53,28 @@ total"); Ctrl+Shift+V views; Alt+Down next unread; Ctrl+Shift+S search with
 `from:sam budget is:unread`; Ctrl+N with address autocomplete; Ctrl+F7 + Alt+1 and F7 + Alt+C spell
 check; Ctrl+Shift+W watch; Ctrl+Shift+C calendar then W; Shift+F10 on messages and folders; Alt+Enter
 properties on a message, a folder and an account.
+
+## With NVDA (2026-10-21, NVDA 2026.2, default settings)
+
+The NVDA edition of the tour was recorded from the same steps, with NVDA's speech log as exact
+text (`OneDrive\testing\quickmail\audio-demo\nvda`). It differed from Narrator in these ways:
+vda`). It differed from Narrator in these ways:
+
+- **Wording:**
+  - Ctrl+1 says "Email accounts list" without naming the account.
+  - The status bar (F6) is spoken three ways in a row: "status bar", "No accounts could be
+    connected. Never synced", and "Status bar: No accounts could be connected."
+  - Menus read each item's access key ("Reply R 1 of 11").
+- **Calendar:** focus lands on the first agenda item ("data item selected 1 of 3"). The long
+  calendar hint wasn't logged, and "No messages" was spoken when the calendar opened.
+- **Reading:** arrow keys in the reading pane read nothing. NVDA's read-all (`n {DOWN}`) reads the
+  message.
+- **Search:** QuickMail's live counts are spoken as you type ("11 messages found … 1 message found").
+
+Possibly QuickMail's, worth checking with real typing and a screen reader:
+- **Doubled announcements:** "Misspelling: reciept.. 1: receipt." twice on Ctrl+F7, "QuickMail
+  will open in Inbox." twice, and "2 messages found" followed by "2 messages" in search. The
+  doubled period ("reciept..", "came in under..") is in the spoken row text too.
+- **Typing without key presses:** typing as Unicode characters (on-screen keyboards, braille
+  input, some dictation) made the navigation spell check announce half-typed words ("Misspelling:
+  Noo", "Misspelling: fo"). Typing detection appears to rely on key-down events.
