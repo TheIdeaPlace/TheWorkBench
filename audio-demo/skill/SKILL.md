@@ -113,23 +113,42 @@ Use `templates\script.txt`. Declare hosts with `#voice NAME kokoro_voice`. Writi
   something the app said on its own.
 - Don't name a specific screen reader product unless the content is about that product. A demo
   recorded with Narrator may say so, because that is what the listener hears.
+- **Chapters:** put a `#chapter <title>` line at the start of each section, usually right after a
+  `[PAUSE]` and once at the very top. The MP3 gets chapters a listener can jump between in podcast
+  apps that support them. That matters in a 20-minute tour. Use titles a listener would look for:
+  "Search", "Writing, and two ways to check spelling".
+- **[PAUSE] is the section break.** It's 1.8 s, clearly longer than the gaps inside a conversation,
+  so the listener hears the topic change. `#pause <seconds>` changes it for a script. Don't use it
+  as a short beat inside a section.
 
 ### 6. Produce and check
 
 ```powershell
-& $py -I "$env:AUDIODEMO_HOME\tools\produce.py" <folder> --out <Name>-v1.mp3
+& $py -I "$env:AUDIODEMO_HOME\tools\produce.py" <folder> --out <Name>-v1.mp3 --transcript
 ```
 
 It renders each host line once (cached by text), trims and levels the clips, adds a soft click
 for each logged key (kept even through pauses that are shortened) and a chime around each demo, and
 normalizes to -16 LUFS. It stops with a line number on anything in the script it doesn't
-understand, and warns about a silent clip. Then check the result:
+understand, and warns about a silent clip. With `#chapter` lines, it writes the chapters into the
+MP3 and prints the chapter list. `--transcript` writes `out\<name>-transcript.txt`, with chapter
+headings, each host line from the script, and each demo as Whisper hears it after trimming.
 
-- Transcribe the whole MP3 (`transcribe.py`) and read it against the script.
+**Clip starts are checked automatically.** A clip starts just before its first logged key. If
+speech is still sounding there, it's leftover from an earlier announcement, and it gets silenced up
+to the next gap, so the demo doesn't open on a stray fragment ("...quarter."). The build log names
+every clip it changed. A `WARNING` means speech ran straight through the first key with no gap.
+Listen to that clip's start, or re-record it with a longer wait before the first key. Then check
+the result:
+
+- Transcribe the whole MP3 (`transcribe.py`), or use `--transcript`, and read it against the
+  script.
 - Whisper often skips a stretch that starts right after a chime. If a demo comes back empty,
   transcribe it again starting 1–2 seconds later (`--from`, `--for`), and measure its level before
   you conclude the audio is missing.
-- Check the beginning of every clip for leftover speech from the previous action.
+- **Check clip starts by level, not by transcript.** In the first QuickMail demo, Narrator's
+  "Unread" was clipped to "...read", and Whisper still wrote "Unread", because it expected the word.
+  The build's start check and an audio level measurement are what catch this.
 
 ### 7. Deliver
 
@@ -137,6 +156,12 @@ understand, and warns about a silent clip. Then check the result:
   copy of each version's script and clips.
 - When a version adds sections, also make an MP3 of just the new sections (a script excerpt run
   through `produce.py --script`). Give demo start times for both files.
+- **Ready to share means three files:**
+  1. The MP3, with chapters and a title.
+  2. A transcript. Start from `--transcript`, read the demo lines, and correct what Whisper misheard
+     against the app's real data (addresses, typed misspellings). Deaf and hard-of-hearing
+     listeners rely on it.
+  3. Short show notes: what it is, where to get the app, and the chapter list with times.
 - Give the person a short listening list: how the host voices sound, the balance between hosts and
   the screen reader, the clicks and chimes, and anything you weren't sure about.
 - Anything that looks like a bug in the app goes in a list for the user. Don't fix it during the

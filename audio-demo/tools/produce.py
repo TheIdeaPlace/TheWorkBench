@@ -11,15 +11,23 @@ Script format (one marker per line, text on the lines after it):
     #voice  MICHAEL am_michael                 one per host; the name is the marker
     #voice  MAYA af_heart
     #speed  1.03                               optional, default 1.03
+    #pause  1.8                                optional: length of a [PAUSE] in seconds, default 1.8
     # any other line starting with '#' is a comment
+    #chapter Getting around                    starts an MP3 chapter here (positional, unlike the rest)
     [MICHAEL]
     Welcome to ...
-    [PAUSE]                                    a 0.9 s beat
+    [PAUSE]                                    a section break
     [DEMO d01-orient]                          insert clips/d01-orient.wav here
 
 Host pacing follows Quill's podcast generator (Community-Access/quill, docs/podcast/tools).
 
-    python -I produce.py <project folder> [--script script.txt] [--out name.mp3]
+    python -I produce.py <project folder> [--script script.txt] [--out name.mp3] [--transcript]
+
+With #chapter lines, the MP3 gets chapters (podcast apps that support them let listeners jump
+between sections) and the chapter list is printed for show notes. --transcript also writes
+out/<name>-transcript.txt: chapter headings, each host line from the script, and each demo as
+Whisper hears it after trimming. Narrator's lines there are machine transcription: read them
+before publishing.
 """
 from __future__ import annotations
 
@@ -36,7 +44,12 @@ import soundfile as sf
 
 SR = 24000
 DEFAULT_SPEED = 1.03
-SAME_SPEAKER_GAP, SPEAKER_CHANGE_GAP, PAUSE_SECONDS = 0.18, 0.32, 0.9
+# A section break has to be clearly longer than the gaps inside a turn and between speakers, or a
+# listener can't hear that the topic changed: 0.9 s was barely longer than ordinary pauses.
+SAME_SPEAKER_GAP, SPEAKER_CHANGE_GAP, DEFAULT_PAUSE = 0.18, 0.32, 1.8
+CHAPTER_LEAD = 0.3                             # a chapter starts this far before its first sound, in silence
+QUIET = 1e-3                                   # about -60 dBFS: the virtual cable gives digital silence
+                                               # between utterances, so anything above this is speech
 DEMO_LEAD, DEMO_TAIL = 0.45, 0.6               # silence around a demo, inside the chimes
 MAX_SILENCE, KEEP_HEAD, KEEP_TAIL = 1.1, 0.30, 0.45   # pause shortening inside clips
 CAPTURE_LAG = 0.35                             # ffmpeg starts a moment after the key stopwatch
@@ -47,17 +60,18 @@ def data_dir() -> Path:
     return Path(os.environ.get("AUDIODEMO_DATA") or Path(os.environ["LOCALAPPDATA"]) / "audio-demo")
 
 
-DIRECTIVE = re.compile(r"^#(voice|speed|title)\s+(.*)$")   # no space after '#': '# voice ...' is a comment
+DIRECTIVE = re.compile(r"^#(voice|speed|title|pause|chapter)\s+(.*)$")   # no space after '#': '# voice ...' is a comment
 MARKER = re.compile(r"^\[([A-Z][A-Z0-9_]*)(?:\s+([\w.-]+))?\]$")
 
 
 def parse(text: str):
-    """Return (directives, segments). Segments are ('SAY', speaker, text) | ('PAUSE',) | ('DEMO', name).
+    """Return (directives, segments). Segments are ('SAY', speaker, text) | ('PAUSE',) | ('DEMO', name)
+    | ('CHAPTER', title).
 
     Strict on purpose: a mistyped marker or stray text fails the build with its line number rather
     than being dropped, or worse, read aloud by a host.
     """
-    meta = {"voices": {}, "speed": DEFAULT_SPEED, "title": ""}
+    meta = {"voices": {}, "speed": DEFAULT_SPEED, "title": "", "pause": DEFAULT_PAUSE}
     segs, cur, buf = [], None, []
 
     def flush():
@@ -78,11 +92,17 @@ def parse(text: str):
                     if len(parts) != 2:
                         raise SystemExit(f"line {n}: '#voice' takes a host name and a Kokoro voice, e.g. #voice MICHAEL am_michael")
                     meta["voices"][parts[0].upper()] = parts[1]
-                elif key == "speed":
+                elif key in ("speed", "pause"):
                     try:
-                        meta["speed"] = float(value)
+                        meta[key] = float(value)
                     except ValueError:
-                        raise SystemExit(f"line {n}: '#speed' needs a number, e.g. #speed 1.03")
+                        example = "#speed 1.03" if key == "speed" else "#pause 1.8"
+                        raise SystemExit(f"line {n}: '#{key}' needs a number, e.g. {example}")
+                elif key == "chapter":
+                    # Positional: the chapter starts where this line sits. It also ends the current
+                    # host turn, so text after it needs a [HOST] marker again.
+                    flush()
+                    segs.append(("CHAPTER", value)); cur = None
                 else:
                     meta["title"] = value
             continue
@@ -109,7 +129,7 @@ def parse(text: str):
     flush()
     if not meta["voices"]:
         raise SystemExit("The script declares no hosts. Add lines like: #voice MICHAEL am_michael")
-    if not segs:
+    if not any(s[0] in ("SAY", "DEMO") for s in segs):
         raise SystemExit("The script has no host turns or demos.")
     return meta, segs
 
@@ -180,6 +200,53 @@ def read_keys(path: Path):
     return keys, start
 
 
+def check_start(speech: np.ndarray, first: float, key: float | None, measured: bool):
+    """Make sure a clip doesn't open in the middle of a word.
+
+    `first` is where the clip would start (just before the first logged key, at `key`). Returns
+    (start, mute_to, lag_shift, note): start the clip at `start`, silence the speech in
+    [start, mute_to) if mute_to is set, move the key clicks `lag_shift` seconds later in the
+    recording (0 normally), and report `note` in the build log ("" when nothing was wrong).
+
+    - Measured logs (with a 'start' entry): the screen reader can't answer a key before it's
+      pressed, so speech already sounding at the cut is leftover from earlier, usually a startup or
+      focus announcement. It's silenced up to the next gap, and the start, with its key click,
+      stays where it was. Without that, the listener heard a stray fragment ("...quarter.") before
+      the demo began.
+    - Older logs use a guessed lag, which was sometimes too small, so the "leftover" can really be
+      the answer to the first key. If the sound began less than 0.5 s before the cut, treat it as
+      that answer and start just before it (re-timing the clicks to match); otherwise silence it as
+      leftover. This is what clipped "Unread" to "...read" in the first QuickMail demo.
+    """
+    fl = int(0.01 * SR)
+
+    def quiet(i, n=1):
+        return all(float(np.sqrt((speech[max(0, j):j + fl] ** 2).mean())) < QUIET if j < len(speech) else True
+                   for j in range(i, i + n * fl, fl))
+
+    i = int(first * SR)
+    if i >= len(speech) or quiet(i):
+        return first, None, 0.0, ""
+    b = i
+    while b > 0 and not quiet(b - 5 * fl, 5):               # back to the start of this sound
+        b -= fl
+    began = (i - b) / SR
+    if not measured and began <= 0.5:
+        new = max(0.0, b / SR - 0.05)
+        return new, None, new - first, (f"opened {began:.2f} s into the screen reader's first answer: "
+                                        f"started {first - new:.2f} s earlier, key clicks re-timed")
+    # Leftover speech: find where it stops (50 ms of quiet). It normally stops when the key is
+    # pressed, so give up 0.6 s after the key rather than silence the answer along with it.
+    limit = int(((key if key is not None else first) + 0.6) * SR)
+    f = i
+    while f < min(limit, len(speech)) and not quiet(f, 5):
+        f += fl
+    if f >= min(limit, len(speech)):
+        return first, None, 0.0, ("WARNING: speech runs through the first key with no gap; the clip may "
+                                  "open mid-word. Listen to its start, or re-record with a longer wait first")
+    return first, f / SR, 0.0, f"silenced {(f - i) / SR:.2f} s of leftover speech at the start"
+
+
 def demo_clip(clips: Path, name: str, host_rms: float) -> np.ndarray:
     wav = clips / f"{name}.wav"
     if not wav.exists():
@@ -191,6 +258,16 @@ def demo_clip(clips: Path, name: str, host_rms: float) -> np.ndarray:
     # Start just before the first logged step: late enough to drop the tail of earlier speech, early
     # enough to keep that step's click. A clip with no logged steps is used from the start.
     first = max(0.0, (keys[0][0] - lag - 0.03) if keys else 0.0)
+    if keys:
+        first, mute_to, shift, note = check_start(speech, first, keys[0][0] - lag, rec_start is not None)
+        lag -= shift
+        if mute_to is not None:
+            a, z = int(first * SR), int(mute_to * SR)
+            fade = min(z - a, int(0.01 * SR))
+            speech[a:a + fade] *= np.linspace(1, 0, fade, dtype=np.float32)
+            speech[a + fade:z] = 0.0
+        if note:
+            print(f"  [DEMO {name}] start: {note}", file=sys.stderr if note.startswith("WARNING") else sys.stdout)
     if float(np.abs(speech).max(initial=0.0)) < 1e-3:
         print(f"  WARNING: clip {name} is silent. Is the screen reader running and speaking into the cable?",
               file=sys.stderr)
@@ -243,6 +320,8 @@ def main() -> int:
     ap.add_argument("project", type=Path, help="project folder (holds script.txt, clips/)")
     ap.add_argument("--script", default="script.txt", help="script file, relative to the project")
     ap.add_argument("--out", default=None, help="MP3 name in out/ (default: <script name>.mp3)")
+    ap.add_argument("--transcript", action="store_true",
+                    help="also write out/<name>-transcript.txt (needs faster-whisper; adds a minute or two)")
     args = ap.parse_args()
 
     proj = args.project.resolve()
@@ -282,39 +361,118 @@ def main() -> int:
     host = {i: say(s[1], s[2]) for i, s in enumerate(segs) if s[0] == "SAY"}
     host_rms = float(np.median([active_rms(a) for a in host.values()])) if host else 0.1
 
-    timeline, prev, marks = [silence(0.5)], None, []
+    # pos is the running length in samples; sound_end is where the last host line or demo ended,
+    # so a chapter can start in the silence before its first sound without reaching back into it.
+    timeline, prev, marks, pos, sound_end = [silence(0.5)], None, [], int(0.5 * SR), 0
+    chapters, pending, events = [], [], []   # events: (seconds, kind, text) for the transcript
+
+    def add(x):
+        nonlocal pos
+        timeline.append(x)
+        pos += len(x)
+
+    def open_chapters(at):
+        for title in pending:
+            # Nothing has been heard yet: the first chapter starts at the very beginning.
+            chapters.append((0.0 if sound_end == 0 else max(sound_end / SR, at / SR - CHAPTER_LEAD), title))
+        pending.clear()
+
     for i, s in enumerate(segs):
         if s[0] == "SAY":
             if prev is not None:
-                timeline.append(silence(SAME_SPEAKER_GAP if prev == s[1] else SPEAKER_CHANGE_GAP))
-            timeline.append(host[i]); prev = s[1]
+                add(silence(SAME_SPEAKER_GAP if prev == s[1] else SPEAKER_CHANGE_GAP))
+            open_chapters(pos)
+            events.append((pos / SR, s[1], s[2]))
+            add(host[i]); prev = s[1]; sound_end = pos
         elif s[0] == "PAUSE":
-            timeline.append(silence(PAUSE_SECONDS)); prev = None
+            add(silence(meta["pause"])); prev = None
+        elif s[0] == "CHAPTER":
+            pending.append(s[1])
         else:
             clip = demo_clip(clips, s[1], host_rms)
-            start = sum(len(x) for x in timeline) / SR
-            timeline += [silence(0.4), chime(True), silence(DEMO_LEAD), clip,
-                         silence(DEMO_TAIL), chime(False), silence(0.4)]
+            start = pos / SR
+            add(silence(0.4))
+            open_chapters(pos)
+            add(chime(True)); add(silence(DEMO_LEAD))
+            events.append((pos / SR, "DEMO", clip))
+            add(clip); add(silence(DEMO_TAIL)); add(chime(False)); sound_end = pos; add(silence(0.4))
             marks.append((s[1], start, len(clip) / SR)); prev = None
-    timeline.append(silence(1.0))
+    open_chapters(pos)          # a #chapter after the last line: start it at the end, harmlessly
+    add(silence(1.0))
     mix = np.concatenate(timeline)
     mix /= max(1.0, float(np.abs(mix).max()) / 0.95)
+    total = len(mix) / SR
 
     name = args.out or (Path(args.script).stem + ".mp3")
     wav = out_dir / (Path(name).stem + ".wav")
     sf.write(wav, mix, SR)
     mp3 = out_dir / name
+    inputs, maps = ["-i", str(wav)], ["-map", "0:a"]
     tags = ["-metadata", f"title={meta['title']}"] if meta["title"] else []
-    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(wav),
+    if chapters:
+        meta_file = out_dir / (Path(name).stem + ".chapters.txt")
+        meta_file.write_text(ffmetadata(chapters, total), encoding="utf-8")
+        inputs += ["-i", str(meta_file)]
+        maps += ["-map_chapters", "1", "-id3v2_version", "3"]   # ID3v2.3 CHAP frames: the widest player support
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", *inputs, *maps,
                     "-af", "loudnorm=I=-16:TP=-1.5:LRA=11", "-ar", "44100", "-ac", "1",
                     "-codec:a", "libmp3lame", "-b:a", "128k", *tags, str(mp3)], check=True)
-    total = len(mix) / SR
     demo_total = sum(d for _, _, d in marks)
     print(f"total {total / 60:.1f} min; hosts {(total - demo_total) / 60:.1f} min; demos {demo_total / 60:.1f} min")
     for nm, start, dur in marks:
-        print(f"  {int(start // 60)}:{int(start % 60):02d}  {nm}  {dur:.1f}s")
+        print(f"  {clock(start)}  {nm}  {dur:.1f}s")
+    if chapters:
+        print("chapters (also in the MP3; for show notes):")
+        for start, title in chapters:
+            print(f"  {clock(start)}  {title}")
+    if args.transcript:
+        out_txt = out_dir / (Path(name).stem + "-transcript.txt")
+        write_transcript(out_txt, meta, events, chapters, mp3.name)
+        print(out_txt)
     print(mp3)
     return 0
+
+
+def clock(t: float) -> str:
+    return f"{int(t // 60)}:{int(t % 60):02d}"
+
+
+def ffmetadata(chapters, total: float) -> str:
+    """An ffmpeg metadata file with one [CHAPTER] per entry; each ends where the next starts."""
+    def esc(s):   # ffmetadata escapes '=', ';', '#', '\' and newlines with a backslash
+        return re.sub(r"([=;#\\\n])", r"\\\1", s)
+    lines = [";FFMETADATA1"]
+    for k, (start, title) in enumerate(chapters):
+        end = chapters[k + 1][0] if k + 1 < len(chapters) else total
+        lines += ["[CHAPTER]", "TIMEBASE=1/1000", f"START={int(round(start * 1000))}",
+                  f"END={int(round(end * 1000))}", f"title={esc(title)}"]
+    return "\n".join(lines) + "\n"
+
+
+def write_transcript(path: Path, meta, events, chapters, mp3_name: str):
+    """Chapter headings, host lines from the script (exact), demos as Whisper hears them."""
+    from faster_whisper import WhisperModel   # only needed here; installed by install.ps1
+    model = WhisperModel("small.en", device="cpu", compute_type="int8")
+    lines = [meta["title"] or "Transcript", "Transcript", f"Times are positions in {mp3_name}.",
+             "Demo lines are automatic speech recognition of the screen reader: check them before publishing.", ""]
+    ci = 0
+    for t, kind, payload in events:
+        while ci < len(chapters) and chapters[ci][0] <= t + 0.5:
+            lines += ["", f"== {chapters[ci][1]} ({clock(chapters[ci][0])}) ==", ""]
+            ci += 1
+        if kind == "DEMO":
+            # Same settings as transcribe.py: VAD and no conditioning keep Whisper from looping on
+            # the long silences, and the audio is exactly what the listener hears in the MP3.
+            pcm = subprocess.run(["ffmpeg", "-loglevel", "error", "-f", "f32le", "-ar", str(SR), "-ac", "1",
+                                  "-i", "-", "-f", "f32le", "-ar", "16000", "-ac", "1", "-"],
+                                 input=payload.astype(np.float32).tobytes(), capture_output=True, check=True).stdout
+            segs, _ = model.transcribe(np.frombuffer(pcm, np.float32), language="en", beam_size=5,
+                                       temperature=0, vad_filter=True, condition_on_previous_text=False)
+            text = " ".join(s.text.strip() for s in segs) or "(no speech recognized; listen to this demo)"
+            lines.append(f"[Demo, {clock(t)}] {text}")
+        else:
+            lines.append(f"{kind.title()}: {' '.join(payload.split())}")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 if __name__ == "__main__":
