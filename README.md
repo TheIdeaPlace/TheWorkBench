@@ -112,6 +112,15 @@ includes a Claude skill so every session knows to use it.
 
 [View Project][16]
 
+### quickcalc
+An experimental calculator for Windows, built for JAWS, NVDA and Narrator users first. You type a
+whole calculation and press Enter, and the answer is spoken straight away without moving focus.
+Errors say what is wrong and where, the keypad is one Tab stop you move around with the arrow
+keys, and a history list keeps every calculation to read back or reuse. Its UI tests drive the
+real app through UI Automation, the same interface screen readers use.
+
+[View Project][17]
+
 ## Getting Started
 
 ## Requirements
@@ -140,3 +149,4 @@ Contributions to existing projects are welcome. If you have a script, app or oth
 [14]:	https://github.com/TheIdeaPlace/HyperVManage
 [15]:	https://github.com/TheIdeaPlace/HyperVManage/tree/main/hyperv-rdp-vm
 [16]:	./vmtest
+[17]:	./quickcalc
