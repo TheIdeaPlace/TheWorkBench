@@ -33,7 +33,8 @@ do.
 | `skill\references\quickmail.md` | App-specific notes from the QuickMail demo, a model for other apps |
 | `tools\setup-rig.ps1` | Turns a vmtest VM into a recording rig: VB-Audio Virtual Cable, ffmpeg, Narrator's voice |
 | `tools\clip.ps1` | Records one demo clip in the VM from a steps file, brings it back, transcribes it |
-| `tools\produce.py` | Builds the MP3 from the script, the host voices and the clips |
+| `tools\produce.py` | Builds the MP3 from the script, the host voices and the clips, with chapters, and optionally a transcript |
+| `tools\test_produce.py` | Self-tests for the clip-start check, script parsing and chapter metadata (no models needed) |
 | `tools\transcribe.py` | Whisper transcripts, to check what the screen reader said |
 | `tools\samples.py` | A sample of every English voice, to choose hosts by ear |
 | `tools\VmFiles.psm1` | Copies files out of the VM, which vmtest's `push` can't do in reverse |

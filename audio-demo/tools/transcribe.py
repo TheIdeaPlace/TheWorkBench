@@ -67,7 +67,9 @@ for p in args.files:
     if model is None:
         from faster_whisper import WhisperModel
         model = WhisperModel(args.model, device="cpu", compute_type="int8")
-    segs, _ = model.transcribe(x, language="en", beam_size=5, temperature=0,
+    # The temperature list is Whisper's standard fallback: a window whose output repeats itself is
+    # retried at a higher temperature, instead of looping on a short phrase.
+    segs, _ = model.transcribe(x, language="en", beam_size=5, temperature=[0.0, 0.2, 0.4, 0.6, 0.8],
                                vad_filter=True, condition_on_previous_text=False)
     offset = args.start or 0.0
     for s in segs:
