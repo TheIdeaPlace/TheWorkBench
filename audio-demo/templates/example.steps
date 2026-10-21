@@ -1,0 +1,22 @@
+# One demo clip: the keys, and how long to let the screen reader talk after each.
+# k = press (logged, gets a click in the final audio)    t = type text (logged, 220 ms a character)
+# q = press, not logged (setup, trimmed)                  Q = type, not logged
+# w = wait seconds                                        x = launch the app (-Launch)
+# The clip starts at the first logged key, so do setup with q/Q before it.
+
+# Setup, cut from the recording: switch to the view the demo starts in.
+q ^+v
+w 1
+q {DOWN}
+q {ENTER}
+w 4
+
+# The demo.
+k ^+p
+w 3
+t gtf
+w 5
+k {ENTER}
+w 6
+k {ESC}
+w 3

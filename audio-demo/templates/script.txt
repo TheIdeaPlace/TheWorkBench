@@ -1,0 +1,37 @@
+#title  <App>: a guided audio tour
+#voice  MICHAEL am_michael
+#voice  MAYA af_heart
+#speed  1.03
+# Lines starting with '#' are directives or comments. Each [NAME] marker starts a turn for a host
+# declared with #voice. [PAUSE] is a short beat. [DEMO name] plays clips\name.wav.
+# Write for the ear: short turns, keys spelled as spoken ("control shift P"), no symbols or markdown.
+
+[MICHAEL]
+Welcome to a guided tour of <App>. I'm Michael.
+
+[MAYA]
+And I'm Maya. We're AI voices, but every demo you'll hear is the real program, running on a Windows
+test machine, with Windows Narrator reading it. A script pressed the keys, and we recorded exactly
+what Narrator said. Afterwards we added a soft click so you can hear each key press, evened out the
+volume, and shortened long pauses. Narrator's words weren't changed.
+
+[PAUSE]
+
+[MICHAEL]
+Let's start it up and just listen.
+
+[DEMO d00-startup]
+
+[MAYA]
+So, a few things happened there. <describe exactly what the clip's transcript says>
+
+[PAUSE]
+
+[MICHAEL]
+<App> is free. You'll find it at <address, spelled the way it should be said>.
+
+[MAYA]
+Thanks for listening. I'm Maya.
+
+[MICHAEL]
+And I'm Michael.

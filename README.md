@@ -121,6 +121,15 @@ real app through UI Automation, the same interface screen readers use.
 
 [View Project][17]
 
+### audio-demo
+Makes an audio demo of a Windows app: two AI hosts talk it through, with real screen reader
+recordings of the app in use in between, as one MP3. The hosts are Kokoro, a free neural voice
+engine that runs on your own PC. The recordings are Windows Narrator in a vmtest VM, captured
+through a virtual audio cable. It includes a Claude skill, an installer, and the tools to record,
+check and assemble a demo. The first one was a 25-minute tour of QuickMail.
+
+[View Project][18]
+
 ## Getting Started
 
 ## Requirements
@@ -150,3 +159,4 @@ Contributions to existing projects are welcome. If you have a script, app or oth
 [15]:	https://github.com/TheIdeaPlace/HyperVManage/tree/main/hyperv-rdp-vm
 [16]:	./vmtest
 [17]:	./quickcalc
+[18]:	./audio-demo
