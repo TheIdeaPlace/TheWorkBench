@@ -1,0 +1,140 @@
+---
+name: audio-demo
+description: Produce an audio demo (a podcast-style MP3) of a Windows app — two AI hosts talking it through, with real screen reader recordings of the app in use, made in a vmtest VM. Use when the user asks for an audio demo, an audio tour, a podcast episode, or a listenable walkthrough of an app; to add or change sections of an existing demo; to re-record a demo clip; or to hear the available AI voices.
+---
+
+# Audio demos with AI hosts and real screen reader recordings
+
+The result is one MP3: two AI hosts (Kokoro, a free on-device neural voice engine) explaining an
+app, with clips in between of a real screen reader (Windows Narrator) reading the real app as keys
+are pressed. The recording happens in a vmtest VM, never on the user's PC. The pipeline follows
+the one Quill used for its podcast (`docs/podcast/` in Community-Access/quill).
+
+**Never claim to know how something sounds.** You can't hear the result. Everything you say
+about speech comes from Whisper transcripts of the recordings and from audio level measurements.
+Ask the person to listen, and say exactly what to listen for.
+
+## Where things are
+
+- Tools: `$env:AUDIODEMO_HOME` (this project's folder: `tools\`, `vm\`, `templates\`). If it isn't
+  set, run `install.ps1` from the project folder first.
+- Python and models: `%LOCALAPPDATA%\audio-demo\venv` and `\models` (or `$env:AUDIODEMO_DATA`).
+  Call Python as `& "$env:LOCALAPPDATA\audio-demo\venv\Scripts\python.exe" -I <tool>.py ...`.
+- vmtest: the vmtest skill. Read it before the first VM command. The tools find vmtest through
+  `VMTEST_HOME`, or next to this project in TheWorkBench.
+- A **project folder** per demo: `script.txt`, `steps\`, `clips\`, `cache\`, `out\`. Keep it
+  outside any git repository. A delivery folder (for example a synced test folder) gets the MP3s
+  and a copy of the project.
+- `references\quickmail.md`: everything specific to QuickMail, and a model of what to write down
+  for any other app.
+
+## The flow
+
+### 1. Agree on the content
+
+Start from the user's talking points (they often have a file). Plan one demo clip per point that
+can be *heard*. Things that are only visual or need hardware, accounts or a network you can't
+reach become host talk, not demos. Default length is 15–25 minutes. Hosts speak at about 160 words
+a minute, and demos are usually 25–60 seconds each.
+
+### 2. Set up
+
+1. `vmtest begin` from the app's repo, on the task's branch.
+2. `powershell -File "$env:AUDIODEMO_HOME\tools\setup-rig.ps1"`, from the same repo. It installs
+   VB-Audio Virtual Cable (the VM has no sound device, so without it Narrator says nothing), copies
+   ffmpeg in, sets Narrator's voice, turns off character echo, and finishes by recording Narrator
+   starting up. Check its transcript says something.
+3. Build the app for the VM's architecture (the pool may be ARM64), `vmtest deploy` it, and seed
+   **realistic** demo data: names people would have, ordinary subjects, today's dates. Test
+   fixtures are written to break layouts and sound absurd read aloud. Keep a pristine copy of the
+   data in the VM and restore it before every take.
+4. Write a reset routine for the app: close it, restore the data, relaunch, and wait until its
+   startup announcements are over. Startup speech landing in the middle of a clip is the most
+   common spoiled take.
+
+### 3. Explore before recording
+
+For each demo, walk the keys with `vmtest keys` and read the focus reports. That tells you where
+focus lands, what each control is called, and which dialogs appear. Plan the steps from that.
+
+### 4. Record
+
+Write `steps\<name>.steps` (format in `templates\example.steps`), then:
+
+```powershell
+powershell -File "$env:AUDIODEMO_HOME\tools\clip.ps1" -Project <folder> -Name d03-search -App <ProcessName>
+```
+
+It records, copies the clip back, and prints a transcript. Read the transcript every time.
+Re-record until it says what the script will claim it says.
+
+- **Waits:** after each key, wait long enough for the screen reader to finish (a message-list row
+  takes 6–10 s). A key pressed while it's talking interrupts it, which is realistic for a quick
+  arrow run but not when the listener needs to hear the result.
+- **Setup:** use `q` / `Q` for setup keys. The clip starts at the first logged (`k`/`t`) key, so
+  setup speech is trimmed away.
+- **Typing:** type with `t`, which waits 220 ms between characters. Faster typing drops
+  characters in apps that filter as you type.
+- **Start state:** start every clip from the reset state, unless it deliberately follows on from
+  another clip.
+- **Type-ahead:** a screen reader may not announce a type-ahead jump. Check, and use arrow keys if
+  it doesn't.
+- **Pop-ups:** a fresh VM can open Windows' "Get Started" window, which takes focus. Close it
+  (`vmtest close -Window 'Get Started'`) before recording. `vm\demo.ps1 -App <process>` brings
+  the app to the front before the first key, but it can't stop a window opening mid-take.
+- **Stray processes:** a stray ffmpeg in the VM holds vmtest's output file and makes every
+  `vmtest run` fail. Kill it with `Invoke-InTestVM 'Get-Process ffmpeg | Stop-Process -Force'`
+  (from `tools\VmFiles.psm1`).
+
+### 5. Write the script
+
+Use `templates\script.txt`. Declare hosts with `#voice NAME kokoro_voice`. Writing rules:
+
+- **Write for the ear.** Use short turns that alternate. Spell keys as spoken. Avoid symbols and
+  markdown. Spell addresses the way they should be said: "dot I O", not ".io", which Kokoro reads
+  as "eo".
+- **Describe only what the transcript of that clip shows,** in the clip's own words. Never describe
+  speech you inferred.
+- **Verify every claim** about a feature or a shortcut against the code or the user guide before it
+  goes in.
+- **Be honest on air.** Say that the hosts are AI voices, that the demos are real recordings, and
+  what editing was done. Say the machine is offline if it is. Say why something wasn't
+  demonstrated.
+- Natural moments help: one host interrupting to connect a feature to an earlier one, or noticing
+  something the app said on its own.
+- Don't name a specific screen reader product unless the content is about that product. A demo
+  recorded with Narrator may say so, because that is what the listener hears.
+
+### 6. Produce and check
+
+```powershell
+& $py -I "$env:AUDIODEMO_HOME\tools\produce.py" <folder> --out <Name>-v1.mp3
+```
+
+It renders each host line once (cached by text), trims and levels the clips, adds a soft click per
+logged key and a chime around each demo, and normalizes to -16 LUFS. Then check the result:
+
+- Transcribe the whole MP3 (`transcribe.py`) and read it against the script.
+- Whisper often skips a stretch that starts right after a chime. If a demo comes back empty,
+  transcribe it again starting 1–2 seconds later (`--from`, `--for`), and measure its level before
+  you conclude the audio is missing.
+- Check the beginning of every clip for leftover speech from the previous action.
+
+### 7. Deliver
+
+- **Version every delivery:** `-v1`, `-v2`, and so on. Never overwrite an earlier version. Keep a
+  copy of each version's script and clips.
+- When a version adds sections, also make an MP3 of just the new sections (a script excerpt run
+  through `produce.py --script`). Give demo start times for both files.
+- Give the person a short listening list: how the host voices sound, the balance between hosts and
+  the screen reader, the clicks and chimes, and anything you weren't sure about.
+- Anything that looks like a bug in the app goes in a list for the user. Don't fix it during the
+  demo work unless they ask.
+
+## Voices
+
+Kokoro v1.0 has 54 voices: 20 American English, 8 British English, and the rest in Spanish,
+French, Hindi, Italian, Japanese, Portuguese and Mandarin. `samples.py <folder>` renders a sample
+of each English voice. The model is Apache-2.0 licensed: free for commercial use, no attribution
+needed for its output. Quill uses `am_liam` and `af_jessica`; the QuickMail demo used `am_michael`
+and `af_heart`.
