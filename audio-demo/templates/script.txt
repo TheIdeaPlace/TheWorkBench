@@ -10,9 +10,10 @@
 Welcome to a guided tour of <App>. I'm Michael.
 
 [MAYA]
-And I'm Maya. Every demo you'll hear is the real program, running on a Windows test machine, with
-Windows Narrator reading it. We pressed real keys and recorded what Narrator said. The only editing
-was trimming long pauses.
+And I'm Maya. We're AI voices, but every demo you'll hear is the real program, running on a Windows
+test machine, with Windows Narrator reading it. A script pressed the keys, and we recorded exactly
+what Narrator said. Afterwards we added a soft click so you can hear each key press, evened out the
+volume, and shortened long pauses. Narrator's words weren't changed.
 
 [PAUSE]
 

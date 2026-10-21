@@ -41,7 +41,8 @@ everything = []
 for v in sorted(x for x in k.get_voices() if x.startswith(prefixes)):
     accent, lang = ACCENTS.get(v[0], ("", "en-us"))
     who = v.split("_", 1)[1].capitalize()
-    intro = f"This is {who}, an {accent} {SEX.get(v[1], '')} voice. " if accent else f"This is {who}. "
+    article = "an" if accent[:1] in "AEIOU" else "a"
+    intro = f"This is {who}, {article} {accent} {SEX.get(v[1], '')} voice. " if accent else f"This is {who}. "
     audio, sr = k.create(intro + args.text, voice=v, speed=1.0, lang=lang)
     wav = args.out / f"{v}.wav"
     sf.write(wav, audio, sr)

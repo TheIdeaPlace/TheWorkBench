@@ -7,7 +7,8 @@
 #   2. copies ffmpeg in, to record the cable;
 #   3. sets Narrator's voice, turns off character echo (typing is heard as words), and stops Narrator
 #      Home from opening; these are Narrator's own settings, written before it first starts;
-#   4. starts Narrator while recording, and transcribes the result, to prove sound comes through.
+#   4. starts Narrator, records it announcing Notepad opening, and prints the transcript and the
+#      voice's pitch, to prove the sound comes through and the voice is the one asked for.
 # Safe to run again: each step checks what is already there.
 #
 # Narrator lists only the OneCore voices: on an English VM, "Microsoft David", "Microsoft Zira" and
@@ -15,7 +16,10 @@
 param(
     [string]$Voice = 'Microsoft Zira - English (United States)',
     [switch]$KeepCharacterEcho,
-    [string]$VbCableUrl = 'https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip'
+    [string]$VbCableUrl = 'https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip',
+    # Pack45 as downloaded on 2026-10-20 and again on 2026-10-21. If VB-Audio publishes a new pack,
+    # check it and update both the URL and this hash.
+    [string]$VbCableSha256 = 'b950e39f01af1d04ea623c8f6d8eb9b6ea5c477c637295fabf20631c85116bfb'
 )
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'VmFiles.psm1') -Force -DisableNameChecking
@@ -28,7 +32,14 @@ New-Item -ItemType Directory -Force $dl | Out-Null
 $zip = Join-Path $dl 'vbcable.zip'
 if (-not (Test-Path $zip)) {
     Write-Host "Downloading VB-Cable from $VbCableUrl"
-    Invoke-WebRequest $VbCableUrl -OutFile $zip -UseBasicParsing
+    $ProgressPreference = 'SilentlyContinue'
+    Invoke-WebRequest $VbCableUrl -OutFile "$zip.part" -UseBasicParsing
+    Move-Item "$zip.part" $zip -Force
+}
+$hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($hash -ne $VbCableSha256) {
+    Remove-Item $zip
+    throw "The VB-Cable download's SHA-256 is $hash, not the pinned $VbCableSha256. Deleted it; not installing."
 }
 Invoke-VmTest push $zip | Out-Null
 Write-Host 'Installing VB-Audio Virtual Cable in the VM...'
@@ -45,7 +56,8 @@ $echo = if ($KeepCharacterEcho) { 1 } else { 0 }
 Invoke-InTestVM @"
 Get-Process Narrator -ErrorAction SilentlyContinue | Stop-Process -Force
 `$base = 'HKCU:\Software\Microsoft\Narrator'
-New-Item `$base, "`$base\NoRoam", "`$base\NarratorHome" -Force -ErrorAction SilentlyContinue | Out-Null
+# Only create missing keys: New-Item -Force on an existing registry key replaces it, values and all.
+foreach (`$k in `$base, "`$base\NoRoam", "`$base\NarratorHome") { if (-not (Test-Path `$k)) { New-Item `$k | Out-Null } }
 Set-ItemProperty "`$base\NoRoam" SpeechVoice '$($Voice -replace "'", "''")'
 Set-ItemProperty `$base EchoChars $echo -Type DWord
 Set-ItemProperty `$base EchoWords 1 -Type DWord
@@ -70,3 +82,10 @@ Write-Host 'Recording Narrator announcing Notepad opening...'
 & (Join-Path $PSScriptRoot 'clip.ps1') -Project $tmp -Name 'rig-check' -Launch 'C:\Windows\notepad.exe'
 Invoke-InTestVM 'Get-Process Notepad -ErrorAction SilentlyContinue | Stop-Process -Force' | Out-Null
 Write-Host "If the transcript above is empty, Narrator isn't reaching the cable. Recording: $tmp\clips\rig-check.wav"
+
+# A transcript can't tell one voice from another, so measure the pitch: Zira, a female voice, sits
+# around 180 Hz; David and Mark around 100-130 Hz.
+$py = Join-Path $data 'venv\Scripts\python.exe'
+$ErrorActionPreference = 'Continue'
+& $py -I (Join-Path $PSScriptRoot 'transcribe.py') --pitch-only (Join-Path $tmp 'clips\rig-check.wav') 2>&1 |
+    Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] }

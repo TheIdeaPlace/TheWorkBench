@@ -18,10 +18,12 @@ It's built to be driven by Claude Code through the `audio-demo` skill, together 
 powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
 ```
 
-You need x64 Python 3.10–3.12 and ffmpeg on PATH (`winget install Gyan.FFmpeg`). The installer
+You need x64 Python 3.12 and ffmpeg on PATH (`winget install Gyan.FFmpeg`). The installer
 creates a Python environment and downloads the Kokoro model (about 340 MB) into
-`%LOCALAPPDATA%\audio-demo`. It installs the skill, and sets `AUDIODEMO_HOME`. Nothing it does
-opens a window. `-WhatIf` shows what it would do.
+`%LOCALAPPDATA%\audio-demo`, along with Whisper's speech model (about 500 MB). It installs the
+skill, and sets `AUDIODEMO_HOME` to the folder you run it from. So run it from the checkout you
+keep, not from a temporary worktree. Nothing it does opens a window. `-WhatIf` shows what it would
+do.
 
 ## What's here
 

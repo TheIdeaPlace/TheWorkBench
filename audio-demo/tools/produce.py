@@ -47,48 +47,70 @@ def data_dir() -> Path:
     return Path(os.environ.get("AUDIODEMO_DATA") or Path(os.environ["LOCALAPPDATA"]) / "audio-demo")
 
 
+DIRECTIVE = re.compile(r"^#(voice|speed|title)\s+(.*)$")   # no space after '#': '# voice ...' is a comment
+MARKER = re.compile(r"^\[([A-Z][A-Z0-9_]*)(?:\s+([\w.-]+))?\]$")
+
+
 def parse(text: str):
-    """Return (directives, segments). Segments are ('SAY', speaker, text) | ('PAUSE',) | ('DEMO', name)."""
+    """Return (directives, segments). Segments are ('SAY', speaker, text) | ('PAUSE',) | ('DEMO', name).
+
+    Strict on purpose: a mistyped marker or stray text fails the build with its line number rather
+    than being dropped, or worse, read aloud by a host.
+    """
     meta = {"voices": {}, "speed": DEFAULT_SPEED, "title": ""}
     segs, cur, buf = [], None, []
 
     def flush():
-        if cur and buf:
+        if buf:
             segs.append(("SAY", cur, " ".join(buf)))
         buf.clear()
 
-    for line in text.splitlines():
+    for n, line in enumerate(text.splitlines(), start=1):
         t = line.strip().lstrip("﻿")
         if not t:
             continue
         if t.startswith("#"):
-            parts = t[1:].split(None, 2)
-            if parts and parts[0] == "voice" and len(parts) == 3:
-                meta["voices"][parts[1].upper()] = parts[2].strip()
-            elif parts and parts[0] == "speed" and len(parts) >= 2:
-                meta["speed"] = float(parts[1])
-            elif parts and parts[0] == "title" and len(parts) >= 2:
-                meta["title"] = t[len("#title"):].strip()
+            d = DIRECTIVE.match(t)
+            if d:
+                key, value = d.group(1), d.group(2).strip()
+                if key == "voice":
+                    parts = value.split()
+                    if len(parts) != 2:
+                        raise SystemExit(f"line {n}: '#voice' takes a host name and a Kokoro voice, e.g. #voice MICHAEL am_michael")
+                    meta["voices"][parts[0].upper()] = parts[1]
+                elif key == "speed":
+                    try:
+                        meta["speed"] = float(value)
+                    except ValueError:
+                        raise SystemExit(f"line {n}: '#speed' needs a number, e.g. #speed 1.03")
+                else:
+                    meta["title"] = value
             continue
-        m = re.match(r"^\[([A-Z][A-Z0-9_]*)(?:\s+([\w.-]+))?\]$", t)
-        if not m:
-            buf.append(t)
+        if t.startswith("[") and t.endswith("]"):
+            m = MARKER.match(t)
+            if not m:
+                raise SystemExit(f"line {n}: '{t}' isn't a marker. Use [HOST], [PAUSE] or [DEMO clip-name], in capitals.")
+            flush()
+            tag = m.group(1)
+            if tag == "PAUSE":
+                segs.append(("PAUSE",)); cur = None
+            elif tag == "DEMO":
+                if not m.group(2):
+                    raise SystemExit(f"line {n}: [DEMO] needs a clip name, e.g. [DEMO d01-orient]")
+                segs.append(("DEMO", m.group(2))); cur = None
+            else:
+                if tag not in meta["voices"]:
+                    raise SystemExit(f"line {n}: [{tag}] has no '#voice {tag} <kokoro voice>' line in the script")
+                cur = tag
             continue
-        flush()
-        tag = m.group(1)
-        if tag == "PAUSE":
-            segs.append(("PAUSE",)); cur = None
-        elif tag == "DEMO":
-            if not m.group(2):
-                raise SystemExit("[DEMO] needs a clip name, e.g. [DEMO d01-orient]")
-            segs.append(("DEMO", m.group(2))); cur = None
-        else:
-            if tag not in meta["voices"]:
-                raise SystemExit(f"[{tag}] has no '#voice {tag} <kokoro voice>' line in the script")
-            cur = tag
+        if cur is None:
+            raise SystemExit(f"line {n}: text with no host. Put a [HOST] marker before it: {t[:60]}")
+        buf.append(t)
     flush()
     if not meta["voices"]:
         raise SystemExit("The script declares no hosts. Add lines like: #voice MICHAEL am_michael")
+    if not segs:
+        raise SystemExit("The script has no host turns or demos.")
     return meta, segs
 
 
@@ -166,8 +188,14 @@ def demo_clip(clips: Path, name: str, host_rms: float) -> np.ndarray:
     keys, rec_start = read_keys(clips / f"{name}.keys.txt")
     # Older logs have no start entry; for them ~0.35 s was measured between the stopwatch and audio.
     lag = rec_start if rec_start is not None else CAPTURE_LAG
-    first = max(0.0, (keys[0][0] - lag + 0.05) if keys else 0.0)
-    speech *= host_rms / active_rms(speech)
+    # Start just before the first logged step: late enough to drop the tail of earlier speech, early
+    # enough to keep that step's click. A clip with no logged steps is used from the start.
+    first = max(0.0, (keys[0][0] - lag - 0.03) if keys else 0.0)
+    if float(np.abs(speech).max(initial=0.0)) < 1e-3:
+        print(f"  WARNING: clip {name} is silent. Is the screen reader running and speaking into the cable?",
+              file=sys.stderr)
+    else:
+        speech *= host_rms / active_rms(speech)
 
     ticks = np.zeros_like(speech)
     c = click() * host_rms * 1.6
@@ -186,7 +214,10 @@ def demo_clip(clips: Path, name: str, host_rms: float) -> np.ndarray:
     fl = int(0.02 * SR)
     n = len(speech) // fl
     rms = np.sqrt((speech[: n * fl].reshape(n, fl) ** 2).mean(1))
-    quiet = rms < max(host_rms * 0.06, 2e-4)
+    has_click = np.abs(ticks[: n * fl]).reshape(n, fl).max(1) > 0
+    # A frame with a click is never "quiet": a key the screen reader says nothing about (a flag
+    # toggled, say) still gets heard being pressed.
+    quiet = (rms < max(host_rms * 0.06, 2e-4)) & ~has_click
     keep = np.ones(n, bool)
     i = 0
     while i < n:
@@ -201,7 +232,10 @@ def demo_clip(clips: Path, name: str, host_rms: float) -> np.ndarray:
         else:
             i += 1
     mask = np.repeat(keep, fl)
-    return (speech[: n * fl] + ticks[: n * fl])[mask].astype(np.float32)
+    out = (speech[: n * fl] + ticks[: n * fl])[mask].astype(np.float32)
+    if len(out) == 0:
+        raise SystemExit(f"[DEMO {name}] is empty after trimming. Does its keys log belong to this recording?")
+    return out
 
 
 def main() -> int:
@@ -239,7 +273,11 @@ def main() -> int:
             a, sr = kokoro.create(ch, voice=voice, speed=speed, lang=lang)
             parts += [a.astype(np.float32), silence(0.12)]
         a = np.concatenate(parts[:-1])
-        sf.write(f, a, SR); return a
+        # Write then rename, so an interrupted build never leaves a truncated line in the cache.
+        tmp = f.with_name(f.stem + ".partial.wav")
+        sf.write(tmp, a, SR)
+        os.replace(tmp, f)
+        return a
 
     host = {i: say(s[1], s[2]) for i, s in enumerate(segs) if s[0] == "SAY"}
     host_rms = float(np.median([active_rms(a) for a in host.values()])) if host else 0.1

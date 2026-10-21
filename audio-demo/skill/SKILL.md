@@ -18,8 +18,10 @@ Ask the person to listen, and say exactly what to listen for.
 
 - Tools: `$env:AUDIODEMO_HOME` (this project's folder: `tools\`, `vm\`, `templates\`). If it isn't
   set, run `install.ps1` from the project folder first.
-- Python and models: `%LOCALAPPDATA%\audio-demo\venv` and `\models` (or `$env:AUDIODEMO_DATA`).
-  Call Python as `& "$env:LOCALAPPDATA\audio-demo\venv\Scripts\python.exe" -I <tool>.py ...`.
+- Python and models: `$env:AUDIODEMO_DATA` if it's set, otherwise `%LOCALAPPDATA%\audio-demo`
+  (`venv\`, `models\`). In PowerShell:
+  `$data = if ($env:AUDIODEMO_DATA) { $env:AUDIODEMO_DATA } else { "$env:LOCALAPPDATA\audio-demo" }`
+  and `$py = "$data\venv\Scripts\python.exe"`. Run tools as `& $py -I <tool>.py ...`.
 - vmtest: the vmtest skill. Read it before the first VM command. The tools find vmtest through
   `VMTEST_HOME`, or next to this project in TheWorkBench.
 - A **project folder** per demo: `script.txt`, `steps\`, `clips\`, `cache\`, `out\`. Keep it
@@ -42,8 +44,9 @@ a minute, and demos are usually 25–60 seconds each.
 1. `vmtest begin` from the app's repo, on the task's branch.
 2. `powershell -File "$env:AUDIODEMO_HOME\tools\setup-rig.ps1"`, from the same repo. It installs
    VB-Audio Virtual Cable (the VM has no sound device, so without it Narrator says nothing), copies
-   ffmpeg in, sets Narrator's voice, turns off character echo, and finishes by recording Narrator
-   starting up. Check its transcript says something.
+   ffmpeg in, sets Narrator's voice, turns off character echo, starts Narrator, and finishes by
+   recording Narrator announcing Notepad opening. Check that the transcript has words in it, and
+   that the pitch matches the voice: Zira about 180 Hz, David and Mark about 100–130 Hz.
 3. Build the app for the VM's architecture (the pool may be ARM64), `vmtest deploy` it, and seed
    **realistic** demo data: names people would have, ordinary subjects, today's dates. Test
    fixtures are written to break layouts and sound absurd read aloud. Keep a pristine copy of the
@@ -71,8 +74,12 @@ Re-record until it says what the script will claim it says.
 - **Waits:** after each key, wait long enough for the screen reader to finish (a message-list row
   takes 6–10 s). A key pressed while it's talking interrupts it, which is realistic for a quick
   arrow run but not when the listener needs to hear the result.
-- **Setup:** use `q` / `Q` for setup keys. The clip starts at the first logged (`k`/`t`) key, so
-  setup speech is trimmed away.
+- **Setup:** use `q` / `Q` for setup keys. The clip starts at the first logged step (`k`, `t` or
+  `x`), so setup speech is trimmed away. A clip with no logged step at all is used from the start of
+  the recording.
+- **What can't be scripted:** SendKeys can't press the Windows key, or hold the screen reader key
+  (Caps Lock or Insert) as a modifier. So screen reader commands like Caps Lock+Tab can't be part
+  of a demo. Show the app's own keys instead.
 - **Typing:** type with `t`, which waits 220 ms between characters. Faster typing drops
   characters in apps that filter as you type.
 - **Start state:** start every clip from the reset state, unless it deliberately follows on from
@@ -80,8 +87,9 @@ Re-record until it says what the script will claim it says.
 - **Type-ahead:** a screen reader may not announce a type-ahead jump. Check, and use arrow keys if
   it doesn't.
 - **Pop-ups:** a fresh VM can open Windows' "Get Started" window, which takes focus. Close it
-  (`vmtest close -Window 'Get Started'`) before recording. `vm\demo.ps1 -App <process>` brings
-  the app to the front before the first key, but it can't stop a window opening mid-take.
+  (`vmtest close -Window 'Get Started'`) before recording. `clip.ps1 -App <process>` brings the app
+  to the front before the first key, and stops if it can't. It can't stop a window opening
+  mid-take, so read every transcript.
 - **Stray processes:** a stray ffmpeg in the VM holds vmtest's output file and makes every
   `vmtest run` fail. Kill it with `Invoke-InTestVM 'Get-Process ffmpeg | Stop-Process -Force'`
   (from `tools\VmFiles.psm1`).
@@ -97,9 +105,10 @@ Use `templates\script.txt`. Declare hosts with `#voice NAME kokoro_voice`. Writi
   speech you inferred.
 - **Verify every claim** about a feature or a shortcut against the code or the user guide before it
   goes in.
-- **Be honest on air.** Say that the hosts are AI voices, that the demos are real recordings, and
-  what editing was done. Say the machine is offline if it is. Say why something wasn't
-  demonstrated.
+- **Be honest on air.** Say that the hosts are AI voices, and that the demos are real recordings.
+  Say the keys were pressed by a script. Say what was done afterwards: clicks added, volume
+  levelled, long pauses shortened, setup cut. Say the machine is offline if it is. Say why
+  something wasn't demonstrated.
 - Natural moments help: one host interrupting to connect a feature to an earlier one, or noticing
   something the app said on its own.
 - Don't name a specific screen reader product unless the content is about that product. A demo
@@ -111,8 +120,10 @@ Use `templates\script.txt`. Declare hosts with `#voice NAME kokoro_voice`. Writi
 & $py -I "$env:AUDIODEMO_HOME\tools\produce.py" <folder> --out <Name>-v1.mp3
 ```
 
-It renders each host line once (cached by text), trims and levels the clips, adds a soft click per
-logged key and a chime around each demo, and normalizes to -16 LUFS. Then check the result:
+It renders each host line once (cached by text), trims and levels the clips, adds a soft click
+for each logged key (kept even through pauses that are shortened) and a chime around each demo, and
+normalizes to -16 LUFS. It stops with a line number on anything in the script it doesn't
+understand, and warns about a silent clip. Then check the result:
 
 - Transcribe the whole MP3 (`transcribe.py`) and read it against the script.
 - Whisper often skips a stretch that starts right after a chime. If a demo comes back empty,

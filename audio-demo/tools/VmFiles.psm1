@@ -28,12 +28,20 @@ function Invoke-InTestVM {
     Invoke-WithGuestSession { param($s) Invoke-Command -Session $s -ScriptBlock ([scriptblock]::Create($Script)) }
 }
 
-# Runs a vmtest command and returns its output lines; throws if vmtest itself failed.
+# Runs a vmtest command and returns its output lines. Throws, with all of the output, if vmtest
+# failed, or if 'vmtest run' reports that the command it ran exited non-zero ("Exit code N").
 function Invoke-VmTest {
     $out = & powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Get-VmTestScriptPath) @args 2>&1
     $code = $LASTEXITCODE
-    $text = $out | ForEach-Object { "$_" }
-    if ($code -ne 0 -and ($text -join "`n") -match 'vmtest \w+ failed') { throw ($text -join "`n") }
+    $text = @($out | ForEach-Object { "$_" })
+    $all = $text -join "`n"
+    if ($all -match 'vmtest \w+ failed') { throw $all }
+    if ($args[0] -eq 'run') {
+        $m = [regex]::Match($all, '(?m)^Exit code (-?\d+)')
+        if (($m.Success -and [int]$m.Groups[1].Value -ne 0) -or (-not $m.Success -and $code -ne 0)) {
+            throw "The command in the VM failed:`n$all"
+        }
+    }
     $text
 }
 

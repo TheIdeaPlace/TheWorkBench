@@ -35,7 +35,8 @@ if ($Launch) { $call += " -Launch $(& $q $Launch)" }
 if ($LaunchArgs) { $call += " -LaunchArgs $(& $q $LaunchArgs)" }
 $wrapper = Join-Path $env:TEMP "audio-demo-run-$Name.ps1"
 Set-Content -Path $wrapper -Value $call -Encoding UTF8
-Invoke-VmTest run -ScriptFile $wrapper -Timeout 900 | Select-Object -Last 2
+# Throws with the VM's full error output if the take failed, so a half take is never copied back.
+Invoke-VmTest run -ScriptFile $wrapper -Timeout 900 | Where-Object { $_ -match '^recorded ' }
 
 $clips = Join-Path $Project 'clips'
 New-Item -ItemType Directory -Force $clips | Out-Null
@@ -45,5 +46,10 @@ Invoke-VmTest focused | Select-Object -Last 1
 
 if (-not $NoTranscribe) {
     $data = if ($env:AUDIODEMO_DATA) { $env:AUDIODEMO_DATA } else { Join-Path $env:LOCALAPPDATA 'audio-demo' }
-    & (Join-Path $data 'venv\Scripts\python.exe') -I (Join-Path $PSScriptRoot 'transcribe.py') (Join-Path $clips "$Name.wav") 2>$null
+    # Windows PowerShell turns a native command's stderr into an error under 'Stop'; Whisper writes
+    # progress and warnings there. Let it through, and judge success by the exit code instead.
+    $ErrorActionPreference = 'Continue'
+    & (Join-Path $data 'venv\Scripts\python.exe') -I (Join-Path $PSScriptRoot 'transcribe.py') (Join-Path $clips "$Name.wav") 2>&1 |
+        Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] }
+    if ($LASTEXITCODE) { Write-Warning "Transcription failed (exit $LASTEXITCODE). The clip itself is in $clips." }
 }
