@@ -555,8 +555,10 @@ def write_transcript(path: Path, meta, events, chapters, mp3_name: str, clips: P
     lines = ([meta["title"]] if meta["title"] else []) + [
         "Transcript", f"Times are positions in {mp3_name}; a demo's time is where its audio starts, after the chime.",
         ("Demo lines marked (heard) are automatic speech recognition of the screen reader: check them "
-         "before publishing. Lines marked (logged) are the screen reader's own record of what it said."
-         if any_whisper else "Demo lines are the screen reader's own record of what it said (its speech log)."), ""]
+         "before publishing. Lines marked (logged) are the text the screen reader sent to its voice, "
+         "from its own log; a following key can cut an utterance short, so listen to those demos too."
+         if any_whisper else "Demo lines are the text the screen reader sent to its voice, from its own log. "
+         "A following key can cut an utterance short, so a line here may be longer than what is heard."), ""]
     ci = 0
     for t, kind, payload in events:
         # A chapter never starts after its first event, so this places each heading just before it.

@@ -17,8 +17,11 @@ recordings (Narrator), and from audio level measurements. Ask the person to list
 exactly what to listen for.
 
 **Choosing the screen reader.** Use the one the person asks for. With NVDA, each clip also gets
-`clips\<name>.speech.txt`, NVDA's log of exactly what it said. Host lines can then quote it
-word for word, and the transcript uses it instead of Whisper. NVDA and Narrator word things
+`clips\<name>.speech.txt`: NVDA's log of the exact text it *sent to its voice*. The transcript
+uses it instead of Whisper. That's not proof the listener heard all of it, because the next key
+cuts speech off. Before a host line quotes a demo, check that the demo wasn't interrupted at that
+point: look at the gap to the next key, or run `clip.ps1 -Whisper` and read what was really
+audible. Quote only what was heard. NVDA and Narrator word things
 differently ("Email accounts list" against "email accounts, work, disconnected"), so a script
 written for one screen reader's clips must be checked line by line against the other's.
 

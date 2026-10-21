@@ -54,10 +54,14 @@ def speech_strings(seq: str) -> list[str]:
     return [s for s in (" ".join(x.split()) for x in out) if s]
 
 
-def parse_nvda_log(path: Path) -> list[tuple[float, str]]:
-    """(seconds since midnight, text) for every 'Speaking' entry in an NVDA log."""
+def parse_nvda_log(path: Path, offset: int = 0) -> list[tuple[float, str]]:
+    """(seconds since midnight, text) for every 'Speaking' entry in an NVDA log, from byte `offset`
+    on. An offset past the end (NVDA restarted, so its log was started afresh) reads it all."""
+    data = path.read_bytes()
+    if offset > len(data):
+        offset = 0
     entries, when = [], None
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    for line in data[offset:].decode("utf-8", errors="replace").splitlines():
         m = HEADER.match(line)
         if m:
             h, mi, s, ms = (int(g) for g in m.groups())
@@ -71,30 +75,55 @@ def parse_nvda_log(path: Path) -> list[tuple[float, str]]:
     return entries
 
 
-def read_clock(keys: Path) -> tuple[float | None, float | None]:
-    """(clock at the stopwatch's zero in seconds since midnight, recording end in clip seconds)."""
-    zero, end = None, None
+def _seconds(clock: str) -> float:
+    hh, mm, rest = clock.split(":")
+    return int(hh) * 3600 + int(mm) * 60 + float(rest)
+
+
+def read_clock(keys: Path) -> dict:
+    """From a clip's key log: 'zero' (wall clock at the stopwatch's zero, seconds since midnight),
+    'end' (recording end, clip seconds), 'logpos' (NVDA's log length when the take began) and
+    'drift' (how far the wall clock moved against the stopwatch during the take, seconds)."""
+    info = {"zero": None, "end": None, "logpos": 0, "drift": None}
+    clock_end = None
     for line in keys.read_text(encoding="utf-8-sig").splitlines():
         parts = line.split("\t")
-        if len(parts) >= 3 and parts[1] == "clock":
-            hh, mm, rest = parts[2].split(":")
-            zero = int(hh) * 3600 + int(mm) * 60 + float(rest) - int(parts[0]) / 1000.0
-        elif len(parts) >= 2 and parts[1] == "end" and parts[0].isdigit():
-            end = int(parts[0]) / 1000.0
-    return zero, end
+        if len(parts) < 2 or not parts[0].isdigit():
+            continue
+        ms = int(parts[0]) / 1000.0
+        if parts[1] == "clock" and len(parts) >= 3:
+            info["zero"] = _seconds(parts[2]) - ms
+        elif parts[1] == "end":
+            info["end"] = ms
+        elif parts[1] == "logpos" and len(parts) >= 3 and parts[2].isdigit():
+            info["logpos"] = int(parts[2])
+        elif parts[1] == "clockend" and len(parts) >= 3:
+            clock_end = (_seconds(parts[2]), ms)
+    if info["zero"] is not None and clock_end is not None:
+        wall = clock_end[0] - info["zero"]
+        if wall < -43200:
+            wall += 86400
+        info["drift"] = wall - clock_end[1]
+    return info
 
 
 def clip_speech(log: Path, keys: Path) -> list[tuple[float, str]]:
     """Utterances during one recording, as (seconds on the clip's stopwatch, text)."""
-    zero, end = read_clock(keys)
+    info = read_clock(keys)
+    zero, end = info["zero"], info["end"]
     if zero is None:
         raise SystemExit(f"{keys} has no 'clock' entry; it was recorded before NVDA support. "
                          "Re-record it to get its speech as text.")
+    if info["drift"] is not None and abs(info["drift"]) > 0.1:
+        print(f"WARNING: the VM's clock moved {info['drift']:+.2f} s during this take (time sync?), so "
+              "NVDA's timestamps may not line up with the keys. Record it again.", file=sys.stderr)
     out = []
-    for when, text in parse_nvda_log(log):
+    for when, text in parse_nvda_log(log, info["logpos"]):
         t = when - zero
         if t < -43200:
             t += 86400       # the recording ran past midnight
+        elif t > 43200:
+            t -= 86400       # the clock entry was just after midnight, the utterance just before
         if t >= 0 and (end is None or t <= end):
             out.append((t, text))
     return out

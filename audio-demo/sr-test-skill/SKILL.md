@@ -47,7 +47,7 @@ pacing and interruptions to the person's listening.
    wording around them ("list", "1 of 9", "selected"), unless you've seen it in an earlier run.
    That wording is NVDA's, it changes between versions, and it isn't what the app controls.
 4. **Write the steps** (`steps\<name>.steps`). Use the audio-demo format, plus expectation lines.
-   Each expectation belongs to the last `k`, `t` or `x` step above it:
+   Each expectation belongs to the last `k`, `t`, `u`, `x` or `n` step above it:
 
    ```
    k ^1                  press Ctrl+1
@@ -59,8 +59,9 @@ pacing and interruptions to the person's listening.
    ```
 
    `n <keys>` holds the NVDA key (Insert) with other keys. For example, `n t` reads the window
-   title, `n {TAB}` reads focus, and `n {DOWN}` reads all. NVDA doesn't announce a title change
-   inside the same window, so check titles with `n t`.
+   title, `n {TAB}` reads focus, and `n {DOWN}` reads all. In the first runs, a view changing
+   inside one window changed its title with nothing spoken about it, so check titles with `n t`
+   rather than expecting them to be announced.
 
    Use `q` and `Q` for setup that isn't under test. Wait long enough after each key for the whole
    announcement, usually 2 to 4 seconds, and 6 to 10 for a long list row. NVDA logs speech when it
@@ -109,8 +110,12 @@ reader, version and voice the run used.
 - **Typing.** `t` sends letters and digits as key presses, and spaces and punctuation as Unicode
   characters. With SendKeys alone, NVDA's word echo ran words together. With Unicode alone, an app
   that detects typing from key presses can mistake each character for caret movement. QuickMail's
-  spell check announced half-typed words. On-screen keyboards and braille input send characters
-  that way too, so try `Q`, which is all Unicode, when that path matters.
+  spell check announced half-typed words. On-screen keyboards, some dictation and braille input
+  send characters that way too, so test that path with `u <text>`. It types everything as Unicode,
+  and is logged like `t`. (`Q` types the same way as `t`, just faster and unlogged.) The hybrid
+  applies only while NVDA runs. Under Narrator, `t` and `Q` type through SendKeys as they always
+  did. With Unicode spaces, Narrator's word echo broke down and something opened the Widgets panel
+  mid-take, so use `u` with NVDA only.
 - **Launching.** `x` brings the launched program's window to the front, because Windows won't let
   a background process do that by itself. It waits up to 60 seconds for any process of that name
   to open a window, which covers single-file (PyInstaller) builds, where the real app is a child

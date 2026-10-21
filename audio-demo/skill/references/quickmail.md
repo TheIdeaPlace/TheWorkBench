@@ -58,7 +58,6 @@ properties on a message, a folder and an account.
 
 The NVDA edition of the tour was recorded from the same steps, with NVDA's speech log as exact
 text (`OneDrive\testing\quickmail\audio-demo\nvda`). It differed from Narrator in these ways:
-vda`). It differed from Narrator in these ways:
 
 - **Wording:**
   - Ctrl+1 says "Email accounts list" without naming the account.

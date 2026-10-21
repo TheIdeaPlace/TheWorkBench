@@ -62,13 +62,20 @@ $in = [IO.File]::Open('C:\vmtest\rec\nvda.log', 'Open', 'Read', 'ReadWrite, Dele
 try { $out = [IO.File]::Create('C:\vmtest\rec\nvda-snapshot.log'); try { $in.CopyTo($out) } finally { $out.Close() } } finally { $in.Close() }
 '@ | Out-Null
     Copy-FromTestVM 'C:\vmtest\rec\nvda-snapshot.log' $log
+    # Never leave the previous take's speech in place: srcheck would check it as this take's.
+    $speechFile = Join-Path $clips "$Name.speech.txt"
+    Remove-Item $speechFile -ErrorAction SilentlyContinue
     $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
-    & $py -I (Join-Path $PSScriptRoot 'speechlog.py') $log (Join-Path $clips "$Name.keys.txt") (Join-Path $clips "$Name.speech.txt") 2>&1 |
-        Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] }
+    # stderr shown as text: speechlog's errors and warnings (no clock entry, the VM clock moving).
+    & $py -I (Join-Path $PSScriptRoot 'speechlog.py') $log (Join-Path $clips "$Name.keys.txt") $speechFile 2>&1 |
+        ForEach-Object { if ($_ -is [System.Management.Automation.ErrorRecord]) { "  $($_.Exception.Message)" } else { $_ } }
     $code = $LASTEXITCODE
     $ErrorActionPreference = $prev
     Remove-Item $log -ErrorAction SilentlyContinue
-    if ($code) { Write-Warning "Couldn't read NVDA's speech log (exit $code)." }
+    if ($code) { throw "Couldn't read NVDA's speech log for $Name (exit $code); see above." }
+    if ((Get-Item $speechFile).Length -eq 0) {
+        Write-Warning "NVDA logged nothing during this take. Is it running with --log-level=12 (setup-rig.ps1 -ScreenReader NVDA starts it so)?"
+    }
 } else {
     Remove-Item (Join-Path $clips "$Name.speech.txt") -ErrorAction SilentlyContinue   # never keep a stale one
 }

@@ -100,22 +100,15 @@ Set-ItemProperty "`$base\NarratorHome" AutoStart 0 -Type DWord
     Invoke-VmTest run -ScriptFile $wrapper -Elevated -Timeout 600 | Select-Object -Last 2
     $nvdaExe = (Invoke-InTestVM 'foreach ($p in "$env:ProgramFiles\NVDA\nvda.exe", "${env:ProgramFiles(x86)}\NVDA\nvda.exe") { if (Test-Path $p) { $p; break } }') | Select-Object -First 1
     if (-not $nvdaExe) { throw 'NVDA installed, but nvda.exe is in neither Program Files folder.' }
-    # NVDA's settings for the signed-in user (the one vmtest drives), written before its first start.
-    # Names from source/config/configSpec.py at release-2026.2. speakTypedCharacters/Words: 0 off,
-    # 1 in edit controls only.
-    Invoke-InTestVM @"
-`$dir = Join-Path `$env:APPDATA 'nvda'
-New-Item -ItemType Directory -Force `$dir | Out-Null
-`$ini = Join-Path `$dir 'nvda.ini'
-if (-not (Test-Path `$ini)) {
-    Set-Content `$ini -Encoding ASCII -Value @(
-        'schemaVersion = 24',
-        '[general]', '	showWelcomeDialogAtStartup = False', '	playStartAndExitSounds = False',
-        '[update]', '	autoCheck = False', '	startupNotification = False', '	allowUsageStats = False', '	askedAllowUsageStats = True',
-        '[keyboard]', '	speakTypedCharacters = $echo', '	speakTypedWords = 1')
-}
-"@ | Out-Null
-    Write-Host "NVDA: $nvdaExe; default voice; character echo $(if ($echo) { 'on' } else { 'off' }), word echo on; speech logged to C:\vmtest\rec\nvda.log."
+    # NVDA's settings for the signed-in user (the one vmtest drives), with NVDA stopped (above):
+    # created on the first run, updated in place on later ones.
+    $seed = Join-Path $env:TEMP 'audio-demo-seed-nvda.ps1'
+    Set-Content $seed -Encoding UTF8 -Value ("& 'C:\vmtest\files\seed-nvda-config.ps1' -CharEcho {0}" -f $echo)
+    Invoke-VmTest push (Join-Path $vmDir 'seed-nvda-config.ps1') | Out-Null
+    $settings = Invoke-VmTest run -ScriptFile $seed -Timeout 60 | Where-Object { $_ -match '=' }
+    Write-Host "NVDA: $nvdaExe, default voice, speech logged to C:\vmtest\rec\nvda.log. nvda.ini now says:"
+    $settings | ForEach-Object { Write-Host "  $_" }
+    Write-Host '  (speakTyped*: 0 off, 1 in edit controls, 2 always)'
 }
 
 # 4. Start it, then record it announcing a window opening. (A screen reader says little or nothing
