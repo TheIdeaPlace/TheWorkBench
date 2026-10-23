@@ -26,6 +26,9 @@ function Get-VmTestConfig {
         StateDir     = if ($env:VMTEST_STATE) { $env:VMTEST_STATE } else { Join-Path $env:LOCALAPPDATA 'vmtest' }
         # A task idle this long is saved and its VM handed on when every VM is busy. 0 turns that off.
         StaleMinutes = ConvertTo-Setting 'VMTEST_STALE_MINUTES' 120
+        # The same, for a task whose Claude session is still open: it may be busy with other work,
+        # so it keeps its VM longer. 0 means never.
+        OpenStaleMinutes = ConvertTo-Setting 'VMTEST_OPEN_STALE_MINUTES' 480
         # Memory this PC keeps for itself: a VM isn't started unless this much would be left over.
         ReserveGB    = ConvertTo-Setting 'VMTEST_RESERVE_GB' 4
     }
@@ -243,8 +246,100 @@ function Set-VmTestLock {
         throw ("'$VMName' is in use by $($held.repo) / $($held.branch) since $(Format-Since $held.since). " +
             "That task should run 'vmtest save' or 'vmtest end' first. Use -Force only if that task is abandoned; its unsaved VM state is lost.")
     }
-    Write-StateFile (Get-LockPath $VMName) ([pscustomobject]@{
-            repo = $Task.Repo; branch = $Task.Branch; checkpoint = $Task.Checkpoint; since = (Get-Date).ToString('s'); v = 2 })
+    $lock = [ordered]@{ repo = $Task.Repo; branch = $Task.Branch; checkpoint = $Task.Checkpoint; since = (Get-Date).ToString('s'); v = 3 }
+    $me = Get-CurrentHolder
+    if ($me) { $lock.pid = $me.pid; $lock.started = $me.started; $lock.session = $me.session }
+    Write-StateFile (Get-LockPath $VMName) ([pscustomobject]$lock)
+}
+
+# ---- which Claude session holds a lock ---------------------------------------------------------
+
+# Claude Code runs every command with its own process id (CLAUDE_PID) and session id. A lock keeps
+# them, so vmtest can tell whether the session holding a VM is still open, and keep other sessions
+# off it, even ones on the same repo and branch, which are the same task. The process's start time
+# goes with its id, so a new process that reuses the id isn't taken for the old one.
+function Get-ProcessStartTime([int]$Id) {
+    $p = Get-Process -Id $Id -ErrorAction SilentlyContinue
+    # A process whose start time this one can't read (one running elevated, say) still exists.
+    if ($p) { try { $p.StartTime.ToString('s') } catch { 'unknown' } }
+}
+
+# The Claude session running this command, or nothing outside Claude Code.
+function Get-CurrentHolder {
+    $id = 0
+    if (-not [int]::TryParse("$env:CLAUDE_PID", [ref]$id) -or $id -le 0) { return }
+    $started = Get-ProcessStartTime $id
+    if (-not $started) { return }
+    [pscustomobject]@{ pid = $id; started = $started; session = "$env:CLAUDE_CODE_SESSION_ID" }
+}
+
+# Whether the session holding a lock is still open: $true, $false, or $null when the lock doesn't
+# say (it was taken outside Claude Code, or by an older vmtest).
+function Test-HolderOpen {
+    param([Parameter(Mandatory)]$Lock)
+    if (-not $Lock.pid -or -not $Lock.started) { return $null }
+    $started = Get-ProcessStartTime ([int]$Lock.pid)
+    $started -eq 'unknown' -or $started -eq $Lock.started
+}
+
+# Whether this command comes from the session holding the lock. A lock that doesn't say who holds
+# it belongs to anyone running its task, as before. So does every lock, to a command run outside
+# Claude Code: that's the user at their own terminal.
+function Test-SameHolder {
+    param([Parameter(Mandatory)]$Lock)
+    if (-not $Lock.pid) { return $true }
+    $me = Get-CurrentHolder
+    if (-not $me) { return $true }
+    [bool]($me.pid -eq [int]$Lock.pid -and $me.started -eq $Lock.started)
+}
+
+# The locks this Claude session holds, under any task.
+function Get-SessionLocks {
+    if (-not (Get-CurrentHolder)) { return }
+    foreach ($n in Get-PoolNames) {
+        $l = Get-VmTestLock $n
+        if ($l -and $l.pid -and (Test-SameHolder $l)) { $l }
+    }
+}
+
+# For a lock this task holds: refuse when another Claude session that is still open holds it.
+function Assert-NotOtherSession {
+    param([Parameter(Mandatory)]$Lock, [Parameter(Mandatory)]$Task)
+    if ((Test-SameHolder $Lock) -or -not (Test-HolderOpen $Lock)) { return }
+    $last = Format-Duration ((Get-Date) - (Get-LastActivity $Lock))
+    throw (New-BusyError ("'$($Lock.vm)' is held for $($Task.Repo) / $($Task.Branch) by another Claude session that is still open " +
+            "(session $($Lock.session), last used $last ago). Sessions on the same repo and branch are the same task, so they'd share one VM " +
+            "and undo each other's work. Work on another branch or worktree, wait with 'vmtest begin -Wait', or ask the user."))
+}
+
+# ---- notes left for a task whose VM was taken --------------------------------------------------
+
+function Get-TakenPath {
+    param([Parameter(Mandatory)][string]$Checkpoint)
+    Join-Path (Get-VmTestConfig).StateDir "taken-$(Get-ShortHash $Checkpoint).json"
+}
+
+# Note that a task's VM went to another task, so its next command can say what happened.
+function Set-TakenNote {
+    param([Parameter(Mandatory)]$Lock, [Parameter(Mandatory)]$By, [Parameter(Mandatory)][string]$How)
+    try {
+        Write-StateFile (Get-TakenPath $Lock.checkpoint) ([pscustomobject]@{
+                checkpoint = $Lock.checkpoint; vm = $Lock.vm; repo = $By.Repo; branch = $By.Branch; at = (Get-Date).ToString('s'); how = $How })
+    } catch { }   # never fail a command over a note
+}
+
+function Get-TakenNote {
+    param([Parameter(Mandatory)]$Task)
+    $p = Get-TakenPath $Task.Checkpoint
+    if (-not (Test-Path $p)) { return }
+    try { $n = Get-Content $p -Raw | ConvertFrom-Json } catch { return }
+    if ($n.checkpoint -eq $Task.Checkpoint) { $n }
+}
+
+function Clear-TakenNote {
+    param([Parameter(Mandatory)]$Task)
+    $p = Get-TakenPath $Task.Checkpoint
+    if (Test-Path $p) { Remove-Item $p -Force }
 }
 
 function Clear-VmTestLock {
@@ -276,13 +371,23 @@ function Get-LastActivity {
     $last
 }
 
-function Test-LockStale {
+# When a held VM becomes idle enough to be saved for its task and handed on, or nothing for never.
+function Get-StaleTime {
     param([Parameter(Mandatory)]$Lock)
     # A lock from before the pool has no record of use, so it never looks idle until its task's
     # first command under this version notes one.
-    if (-not $Lock.v -and (Get-LastActivity $Lock) -eq [datetime]::Parse($Lock.since)) { return $false }
-    $minutes = (Get-VmTestConfig).StaleMinutes
-    $minutes -gt 0 -and ((Get-Date) - (Get-LastActivity $Lock)).TotalMinutes -ge $minutes
+    if (-not $Lock.v -and (Get-LastActivity $Lock) -eq [datetime]::Parse($Lock.since)) { return }
+    $config = Get-VmTestConfig
+    if ($config.StaleMinutes -le 0) { return }
+    # A task whose session is still open may be busy elsewhere for a while, so it gets longer.
+    $minutes = if (Test-HolderOpen $Lock) { $config.OpenStaleMinutes } else { $config.StaleMinutes }
+    if ($minutes -gt 0) { (Get-LastActivity $Lock).AddMinutes($minutes) }
+}
+
+function Test-LockStale {
+    param([Parameter(Mandatory)]$Lock)
+    $at = Get-StaleTime $Lock
+    [bool]($at -and (Get-Date) -ge $at)
 }
 
 # The pool VM this task holds, or nothing.
@@ -294,16 +399,38 @@ function Find-TaskVM {
     }
 }
 
-# This task must hold a VM. From here on the command works on that VM.
+# This task must hold a VM, for this session. From here on the command works on that VM.
 function Assert-LockedBy {
     param([Parameter(Mandatory)]$Task)
     $name = Find-TaskVM $Task
-    if (-not $name) {
-        throw ("$($Task.Repo) / $($Task.Branch) doesn't hold a test VM. Run 'vmtest begin' first; it carries on from " +
-            "this task's last save, including one made for it after it sat idle.")
-    }
+    if (-not $name) { throw (Get-NoVMMessage $Task) }
+    Assert-NotOtherSession (Get-VmTestLock $name) $Task
     $script:CurrentVM = $name
     $name
+}
+
+# Why this task holds no VM, and what to do, so a session never just finds its VM gone.
+function Get-NoVMMessage {
+    param([Parameter(Mandatory)]$Task)
+    $lines = @("$($Task.Repo) / $($Task.Branch) doesn't hold a test VM.")
+    $taken = Get-TakenNote $Task
+    if ($taken) {
+        $lines += switch ($taken.how) {
+            'idle' { "'$($taken.vm)' sat unused, so at $(Format-Since $taken.at) it was saved for this task and given to $($taken.repo) / $($taken.branch). Nothing was lost." }
+            'reset' { "At $(Format-Since $taken.at), another session on this task ran 'vmtest end -Force' and put '$($taken.vm)' back to Clean, so this task's unsaved state there is lost." }
+            'prepare' { "At $(Format-Since $taken.at), 'vmtest prepare -Force' remade Clean on '$($taken.vm)', so this task's unsaved state there is lost." }
+            default { "At $(Format-Since $taken.at), $($taken.repo) / $($taken.branch) took '$($taken.vm)' with -Force, so this task's unsaved state there is lost." }
+        }
+    }
+    # The task comes from the folder vmtest runs in. A session whose shell went back to another
+    # folder asks about the wrong task; say which VMs this session does hold.
+    $elsewhere = @(Get-SessionLocks)
+    foreach ($l in $elsewhere) {
+        $lines += "This session holds '$($l.vm)' for $($l.repo) / $($l.branch). vmtest takes the task from the folder it runs in ($((Get-Location).Path)); run it from that repo's folder, or pass -Repo and -Branch."
+    }
+    $lines += if ($elsewhere) { "Don't run 'vmtest begin' here: that would take a second VM." }
+    else { "Run 'vmtest begin' first; it carries on from this task's last save, including one made for it after it sat idle." }
+    $lines -join ' '
 }
 
 # Commands that change a VM or a lock run one at a time across every vmtest on this PC, so two
@@ -630,6 +757,9 @@ function Invoke-VmTestPrepare {
         if ($held -and -not ($task -and $task.Checkpoint -eq $held.checkpoint) -and -not $Force) {
             throw "'$name' is in use by $($held.repo) / $($held.branch). Prepare reboots it, so wait until that task runs 'vmtest save' or 'vmtest end'."
         }
+        if ($held -and -not ($task -and $task.Checkpoint -eq $held.checkpoint)) {
+            Set-TakenNote -Lock $held -By ([pscustomobject]@{ Repo = 'vmtest prepare'; Branch = '-Force' }) -How 'prepare'
+        }
         if ((Test-Checkpoint $script:CleanCheckpoint) -and -not $Force) {
             throw "'$name' already has a Clean checkpoint. Use -Force to replace it."
         }
@@ -884,12 +1014,11 @@ function Select-VMForTask {
         $l = $Locks[$v.Name]
         $lines += "'$($v.Name)' is in use by $($l.repo) / $($l.branch) since $(Format-Since $l.since), last used $(Format-Duration ((Get-Date) - (Get-LastActivity $l))) ago."
     }
-    $minutes = (Get-VmTestConfig).StaleMinutes
-    # A lock from before the pool is never taken for idle (see Test-LockStale), so it isn't promised.
-    $first = @($held | Where-Object { $l = $Locks[$_.Name]; $l.v -or (Get-LastActivity $l) -ne [datetime]::Parse($l.since) })[0]
-    if ($first -and $minutes -gt 0) {
-        $next = (Get-LastActivity $Locks[$first.Name]).AddMinutes($minutes)
-        $lines += "If '$($first.Name)' is still idle at $(Format-Since $next.ToString('s')), the next 'vmtest begin' saves it for its task and takes it."
+    # The VM that becomes idle enough to take soonest, if any ever does (see Get-StaleTime).
+    $first = @($held | ForEach-Object { [pscustomobject]@{ Name = $_.Name; At = Get-StaleTime $Locks[$_.Name] } } |
+            Where-Object { $_.At } | Sort-Object At)[0]
+    if ($first) {
+        $lines += "If '$($first.Name)' is still idle at $(Format-Since $first.At.ToString('s')), the next 'vmtest begin' saves it for its task and takes it."
     }
     $lines += "Wait with 'vmtest begin -Wait', or ask the user."
     throw (New-BusyError ($lines -join ' '))
@@ -900,11 +1029,13 @@ function Invoke-VmTestBegin {
     param([string]$Repo, [string]$Branch, [string]$VM, [switch]$Force, [int]$WaitSeconds = 0)
     $task = Resolve-Task -Repo $Repo -Branch $Branch
     $deadline = (Get-Date).AddSeconds($WaitSeconds)
+    $said = $false
     while ($true) {
         try { return Start-TaskOnVM -Task $task -VM $VM -Force:$Force }
         catch {
             if (-not $_.Exception.Data['vmtestBusy'] -or (Get-Date) -ge $deadline) { throw }
-            Write-Host "No test VM is free yet; trying again in 30 seconds."
+            if (-not $said) { Write-Host "Waiting: $($_.Exception.Message)"; $said = $true }
+            Write-Host "Still waiting; trying again in 30 seconds."
             Start-Sleep -Seconds 30
         }
     }
@@ -925,6 +1056,13 @@ function Start-TaskOnVM {
         foreach ($v in $pool) { $locks[$v.Name] = Get-VmTestLock $v.Name }
         foreach ($v in $pool) { Use-TestVM $v.Name { Repair-TaskCheckpoint $Task.Checkpoint $Task.Legacy } }
         $mine = @($pool | Where-Object { $locks[$_.Name] -and $locks[$_.Name].checkpoint -eq $Task.Checkpoint })[0]
+        # A session holding a VM for another task has most likely run this from the wrong folder.
+        $other = @(Get-SessionLocks | Where-Object { $_.checkpoint -ne $Task.Checkpoint })[0]
+        if (-not $mine -and $other -and -not $Force) {
+            throw ("This session already holds '$($other.vm)' for $($other.repo) / $($other.branch), and this is $($Task.Repo) / $($Task.Branch). " +
+                "vmtest takes the task from the folder it runs in ($((Get-Location).Path)), so run it from that repo's folder. " +
+                "To start testing a second task, 'vmtest save' (or 'vmtest end') the first one from its folder first.")
+        }
         if ($mine -and $VM -and $mine.Name -ne $VM) {
             throw "$($Task.Repo) / $($Task.Branch) already has '$($mine.Name)'. Run 'vmtest save' first, then 'vmtest begin -VM $VM'."
         }
@@ -932,10 +1070,26 @@ function Start-TaskOnVM {
         $note = ''
         if ($mine) {
             # This task already has the VM: carry on from wherever it is, never restore over it.
+            # Another open session on the same task keeps it, unless it has left it idle or -Force.
+            $held = $locks[$mine.Name]
+            $takeOver = -not (Test-SameHolder $held)
+            $stale = Test-LockStale $held
+            if ($takeOver -and -not $Force -and -not $stale) { Assert-NotOtherSession $held $Task }
             $script:CurrentVM = $mine.Name
             if (-not (Test-RoomToStart $mine)) {
                 throw (New-BusyError "This task has '$($mine.Name)', but this PC has $(Format-GB (Get-HostFreeMemoryBytes)) of memory free, not enough to start it.")
             }
+            if ($takeOver) {
+                $why = if (-not (Test-HolderOpen $held)) { 'a session that has closed' }
+                elseif ($stale) { "an open session that left it unused for $(Format-Duration ((Get-Date) - (Get-LastActivity $held)))" }
+                else { 'an open session, with -Force' }
+                $note = " This session took it over from $why."
+                Set-VmTestLock -Task $Task
+            } elseif (-not $held.pid -and (Get-CurrentHolder)) {
+                # A lock from before vmtest knew sessions: this session claims it, so it's kept safe from here on.
+                Set-VmTestLock -Task $Task
+            }
+            Clear-TakenNote $Task
             Set-StandardCheckpoints
             switch ($mine.State) {
                 'Running' { $from = 'the running VM (this task already had it)' }
@@ -949,15 +1103,18 @@ function Start-TaskOnVM {
             $target = $choice.VM
             if ($choice.Stale) {
                 $s = $choice.Stale
-                Save-TaskState -Checkpoint $s.checkpoint -VMName $target.Name
                 $note = " $($s.repo) / $($s.branch) had held it unused for $(Format-Duration ((Get-Date) - (Get-LastActivity $s))), so its state was saved first; 'vmtest begin' there carries on from it."
+                Save-TaskState -Checkpoint $s.checkpoint -VMName $target.Name
+                Set-TakenNote -Lock $s -By $Task -How 'idle'
             } elseif ($choice.Forced) {
+                Set-TakenNote -Lock $choice.Forced -By $Task -How 'force'
                 $note = " It was taken from $($choice.Forced.repo) / $($choice.Forced.branch) with -Force; that task's unsaved state is lost."
             } elseif ($choice.Elsewhere) {
                 $note = " This task's checkpoint is on '$($choice.Elsewhere.Name)', which is busy, so this started from Clean. Saving here replaces that checkpoint."
             }
             $script:CurrentVM = $target.Name
             Set-VmTestLock -Task $Task -Force
+            Clear-TakenNote $Task
             Set-StandardCheckpoints
             $own = Test-Checkpoint $Task.Checkpoint
             $from = if ($own) { "this task's checkpoint '$($Task.Checkpoint)'" } else { $script:CleanCheckpoint }
@@ -1116,16 +1273,23 @@ function Invoke-VmTestEnd {
         $mine = Find-TaskVM $task
         if ($VM -and @(Get-PoolNames) -notcontains $VM) { throw "'$VM' isn't one of the pool's test VMs: $((Get-PoolNames) -join ', ')." }
         if ($VM -and $mine -and $VM -ne $mine) { throw "This task holds '$mine', not '$VM'. Run 'vmtest end' without -VM." }
+        # Only -Force with -VM resets a VM another open session on this task is using, and that session gets a note.
+        $mineLock = if ($mine) { Get-VmTestLock $mine }
+        if ($mine -and -not ($Force -and $VM)) { Assert-NotOtherSession $mineLock $task }
+        $resetOther = $mine -and -not (Test-SameHolder $mineLock) -and (Test-HolderOpen $mineLock)
         $reset = if ($mine) { $mine } elseif ($Force) { if ($VM) { $VM } else { Get-PrimaryName } }
         $evicted = if ($reset -and $reset -ne $mine) { Get-VmTestLock $reset }
         foreach ($name in $had) { if ($name -ne $reset) { Use-TestVM $name { Remove-TestCheckpoint $task.Checkpoint } } }
         $what = if ($had) { "Removed '$($task.Checkpoint)' from $(($had | ForEach-Object { "'$_'" }) -join ' and ')." } else { 'There was no checkpoint for this task.' }
-        if (-not $reset) { return "$what This task held no test VM, so none was reset." }
+        if (-not $reset) { Clear-TakenNote $task; return "$what This task held no test VM, so none was reset." }
         $script:CurrentVM = $reset
         Assert-CleanCheckpoint
         Remove-TestCheckpoint $task.Checkpoint
         Restore-TestCheckpoint $script:CleanCheckpoint
         Clear-VmTestLock
+        Clear-TakenNote $task
+        if ($evicted) { Set-TakenNote -Lock $evicted -By $task -How 'force' }
+        if ($resetOther) { Set-TakenNote -Lock $mineLock -By $task -How 'reset' }
         $lost = if ($evicted) { " It was in use by $($evicted.repo) / $($evicted.branch), whose unsaved state is lost." } else { '' }
         "$what Put '$reset' back to '$script:CleanCheckpoint' and freed it.$lost"
     }
@@ -1147,7 +1311,9 @@ function Get-VmTestStatus {
         $held = Get-VmTestLock $name
         $who = if ($held) {
             $idle = (Get-Date) - (Get-LastActivity $held)
-            "in use by $($held.repo) / $($held.branch) since $(Format-Since $held.since), last used $(Format-Duration $idle) ago" +
+            $open = Test-HolderOpen $held
+            $session = if ($open) { ', by a Claude session that is open' } elseif ($open -eq $false) { ', by a Claude session that has closed' } else { '' }
+            "in use by $($held.repo) / $($held.branch) since $(Format-Since $held.since), last used $(Format-Duration $idle) ago$session" +
                 $(if (Test-LockStale $held) { '; idle long enough that the next begin with no free VM saves it and takes it' } else { '' })
         } else { 'free' }
         $checkpoints = Use-TestVM $name { Get-CheckpointNames }

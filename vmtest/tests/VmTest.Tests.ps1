@@ -4,6 +4,9 @@
 $root = Split-Path $PSScriptRoot
 $env:VMTEST_VM = 'vmtest-pester-no-such-vm'
 $env:VMTEST_POOL = '1'
+# Run as if outside Claude Code, so locks don't name the session running the tests. The
+# 'Claude sessions' tests set these themselves.
+Remove-Item Env:\CLAUDE_PID, Env:\CLAUDE_CODE_SESSION_ID -ErrorAction SilentlyContinue
 $second = "$env:VMTEST_VM-2"
 Import-Module (Join-Path $root 'VmTest.psm1') -Force
 
@@ -564,6 +567,253 @@ Describe 'the pool' {
         { Invoke-VmTestEnd -Repo 'Mine' -Branch 'x' -VM 'SomeoneElsesVM' -Force } | Should Throw "isn't one of the pool's test VMs"
         Set-HeldSince $second $other 5
         Invoke-VmTestEnd -Repo 'Mine' -Branch 'x' -VM $second -Force | Should Match 'in use by Other / work, whose unsaved state is lost'
+    }
+    Context 'Claude sessions' {
+        # Fake Claude processes: process id -> start time. Process 1, 2 and 4 are open; 3 has closed.
+        $global:FakeProcs = @{ '1' = '2026-10-22T09:00:00'; '2' = '2026-10-22T10:00:00'; '4' = '2026-10-22T11:00:00' }
+        Mock -ModuleName VmTest Get-ProcessStartTime { $global:FakeProcs["$Id"] }
+        function Use-Session([int]$Id) { $env:CLAUDE_PID = "$Id"; $env:CLAUDE_CODE_SESSION_ID = "session-$Id" }
+        function Set-HeldBy([int]$Id, [string]$VMName, $Task, [int]$MinutesAgo) {
+            $global:FakeProcs['3'] = '2026-10-22T08:00:00'   # open while it takes the lock, closed after
+            Use-Session $Id
+            Set-HeldSince $VMName $Task $MinutesAgo
+            $global:FakeProcs.Remove('3')
+        }
+        try {
+
+        It 'a lock records the session that took it' {
+            Use-TwoVMs; Reset-Locks
+            Use-Session 1
+            Invoke-VmTestBegin -Repo 'Mine' -Branch 'x' | Out-Null
+            $l = Get-VmTestLock -VMName $first
+            $l.pid | Should Be 1
+            $l.started | Should Be '2026-10-22T09:00:00'
+            $l.session | Should Be 'session-1'
+        }
+        It "never takes an open session's VM after two hours idle, and says when it would" {
+            Use-TwoVMs; Reset-Locks
+            Set-HeldBy 1 $first $other 300
+            Set-HeldBy 2 $second $third 200
+            Use-Session 4
+            $err = $null
+            try { Invoke-VmTestBegin -Repo 'Mine' -Branch 'x' } catch { $err = $_ }
+            $err.Exception.Data['vmtestBusy'] | Should Be $true
+            $err.Exception.Message | Should Match "If '$first' is still idle at"
+            @(Get-AllCalls).Count | Should Be 0
+        }
+        It "takes an open session's VM once it has been idle for VMTEST_OPEN_STALE_MINUTES" {
+            Use-TwoVMs; Reset-Locks
+            Set-HeldBy 1 $first $other 5
+            Set-HeldBy 2 $second $third 500
+            Use-Session 4
+            Invoke-VmTestBegin -Repo 'Mine' -Branch 'x' | Should Match 'Third / y had held it unused for 8 hours 20 minutes'
+        }
+        It 'never takes an open session''s VM when VMTEST_OPEN_STALE_MINUTES is 0' {
+            Use-TwoVMs; Reset-Locks
+            Set-HeldBy 1 $first $other 5000
+            Set-HeldBy 2 $second $third 5000
+            $env:VMTEST_OPEN_STALE_MINUTES = '0'
+            Use-Session 4
+            try { { Invoke-VmTestBegin -Repo 'Mine' -Branch 'x' } | Should Throw 'is in use by' }
+            finally { Remove-Item Env:\VMTEST_OPEN_STALE_MINUTES }
+        }
+        It "takes a closed session's VM after two hours idle" {
+            Use-TwoVMs; Reset-Locks
+            Set-HeldBy 1 $first $other 5
+            Set-HeldBy 3 $second $third 130
+            Use-Session 2
+            Invoke-VmTestBegin -Repo 'Mine' -Branch 'x' | Should Match 'Third / y had held it unused for 2 hours 10 minutes'
+        }
+        It 'keeps another open session on the same repo and branch out, and touches nothing' {
+            Reset-Locks
+            Use-FakePool -FreeGB 64 @{ $first = (New-FakeVM -State 'Running'); $second = (New-FakeVM -Checkpoints 'Clean', $mine.Checkpoint) }
+            Set-HeldBy 1 $first $mine 5
+            Use-Session 2
+            $err = $null
+            try { Invoke-VmTestBegin -Repo 'Mine' -Branch 'x' } catch { $err = $_ }
+            $err.Exception.Message | Should Match 'another Claude session that is still open \(session session-1'
+            $err.Exception.Data['vmtestBusy'] | Should Be $true
+            { Assert-TaskHasVM -Repo 'Mine' -Branch 'x' } | Should Throw 'another Claude session that is still open'
+            { Invoke-VmTestSave -Repo 'Mine' -Branch 'x' } | Should Throw 'another Claude session that is still open'
+            { Invoke-VmTestEnd -Repo 'Mine' -Branch 'x' } | Should Throw 'another Claude session that is still open'
+            @(Get-AllCalls).Count | Should Be 0
+            (FakeVM $second).Checkpoints -contains $mine.Checkpoint | Should Be $true
+            (Get-VmTestLock -VMName $first).pid | Should Be 1
+        }
+        It 'the session holding the VM carries on as before' {
+            Reset-Locks
+            Use-FakePool -FreeGB 64 @{ $first = (New-FakeVM -State 'Running'); $second = (New-FakeVM) }
+            Set-HeldBy 1 $first $mine 5
+            Use-Session 1
+            { Assert-TaskHasVM -Repo 'Mine' -Branch 'x' } | Should Not Throw
+            Invoke-VmTestBegin -Repo 'Mine' -Branch 'x' | Should Not Match 'took it over'
+        }
+        It 'takes over its own task from a session that has closed, without restoring over it' {
+            Reset-Locks
+            Use-FakePool -FreeGB 64 @{ $first = (New-FakeVM -State 'Running'); $second = (New-FakeVM) }
+            Set-HeldBy 3 $first $mine 5
+            Use-Session 2
+            Invoke-VmTestBegin -Repo 'Mine' -Branch 'x' | Should Match "'$first' .* took it over from a session that has closed"
+            @(Get-AllCalls | Where-Object { $_ -like '*restore*' }).Count | Should Be 0
+            (Get-VmTestLock -VMName $first).pid | Should Be 2
+            { Assert-TaskHasVM -Repo 'Mine' -Branch 'x' } | Should Not Throw
+        }
+        It 'takes over its own task from an open session once that has left it idle' {
+            Reset-Locks
+            Use-FakePool -FreeGB 64 @{ $first = (New-FakeVM -State 'Running'); $second = (New-FakeVM) }
+            Set-HeldBy 1 $first $mine 500
+            Use-Session 2
+            Invoke-VmTestBegin -Repo 'Mine' -Branch 'x' | Should Match 'took it over from an open session that left it unused for 8 hours 20 minutes'
+        }
+        It 'lets anyone on the task use a lock that does not say which session holds it' {
+            Reset-Locks
+            Use-FakePool -FreeGB 64 @{ $first = (New-FakeVM -State 'Running'); $second = (New-FakeVM) }
+            Remove-Item Env:\CLAUDE_PID -ErrorAction SilentlyContinue
+            Set-HeldSince $first $mine 5
+            Use-Session 2
+            { Assert-TaskHasVM -Repo 'Mine' -Branch 'x' } | Should Not Throw
+        }
+        It 'tells a task whose VM was taken while idle what happened, until it begins again' {
+            Use-TwoVMs; Reset-Locks
+            Set-HeldBy 1 $first $other 5
+            Set-HeldBy 3 $second $third 200
+            Use-Session 2
+            Invoke-VmTestBegin -Repo 'Mine' -Branch 'x' | Out-Null
+            Use-Session 1
+            $err = $null
+            try { Assert-TaskHasVM -Repo 'Third' -Branch 'y' } catch { $err = $_ }
+            $err.Exception.Message | Should Match "Third / y doesn't hold a test VM. '$second' sat unused, so at .* it was saved for this task and given to Mine / x. Nothing was lost."
+        }
+        It 'tells a task its unsaved state went when -Force took its VM' {
+            Use-TwoVMs; Reset-Locks
+            Set-HeldBy 1 $first $other 5
+            Set-HeldBy 3 $second $third 30
+            Use-Session 2
+            Invoke-VmTestBegin -Repo 'Mine' -Branch 'x' -Force | Should Match 'taken from Third / y'
+            $err = $null
+            try { Assert-TaskHasVM -Repo 'Third' -Branch 'y' } catch { $err = $_ }
+            $err.Exception.Message | Should Match "Mine / x took '$second' with -Force, so this task's unsaved state there is lost"
+        }
+        It 'clears the note once the task begins again' {
+            Use-TwoVMs; Reset-Locks
+            Set-HeldBy 1 $first $other 5
+            Set-HeldBy 3 $second $third 200
+            Use-Session 2
+            Invoke-VmTestBegin -Repo 'Mine' -Branch 'x' | Out-Null
+            Invoke-VmTestSave -Repo 'Mine' -Branch 'x' | Out-Null
+            Invoke-VmTestBegin -Repo 'Third' -Branch 'y' | Out-Null
+            Invoke-VmTestSave -Repo 'Third' -Branch 'y' | Out-Null
+            { Assert-TaskHasVM -Repo 'Third' -Branch 'y' } | Should Throw "Third / y doesn't hold a test VM. Run 'vmtest begin' first"
+        }
+        It 'tells a session asking about the wrong task which VM it does hold' {
+            Reset-Locks
+            Use-FakePool -FreeGB 64 @{ $first = (New-FakeVM -State 'Running'); $second = (New-FakeVM) }
+            Set-HeldBy 2 $first $mine 5
+            Use-Session 2
+            $err = $null
+            try { Assert-TaskHasVM -Repo 'TheWorkBench' -Branch 'main' } catch { $err = $_ }
+            $err.Exception.Message | Should Match "This session holds '$first' for Mine / x. vmtest takes the task from the folder it runs in"
+            $err.Exception.Message | Should Match "Don't run 'vmtest begin' here"
+            $err.Exception.Message | Should Not Match 'Run .vmtest begin. first'
+            Use-Session 1
+            $err = $null
+            try { Assert-TaskHasVM -Repo 'TheWorkBench' -Branch 'main' } catch { $err = $_ }
+            $err.Exception.Message | Should Not Match 'This session holds'
+        }
+        It 'status says whether the holding session is open' {
+            Use-TwoVMs; Reset-Locks
+            Set-HeldBy 1 $first $other 5
+            Set-HeldBy 3 $second $third 5
+            $s = (Get-VmTestStatus) -join "`n"
+            $s | Should Match "'$first': Running, in use by Other / work since .* ago, by a Claude session that is open"
+            $s | Should Match "'$second': Saved, in use by Third / y since .* ago, by a Claude session that has closed"
+        }
+        It 'end -Force tells the task it evicted' {
+            Use-TwoVMs; Reset-Locks
+            Set-HeldBy 1 $second $other 5
+            Use-Session 2
+            Invoke-VmTestEnd -Repo 'Mine' -Branch 'x' -VM $second -Force | Out-Null
+            Use-Session 1
+            $err = $null
+            try { Assert-TaskHasVM -Repo 'Other' -Branch 'work' } catch { $err = $_ }
+            $err.Exception.Message | Should Match "Mine / x took '$second' with -Force"
+        }
+        It "won't give a session a second VM when it runs begin from the wrong folder" {
+            Use-TwoVMs; Reset-Locks
+            Set-HeldBy 2 $first $mine 5
+            Use-Session 2
+            { Invoke-VmTestBegin -Repo 'TheWorkBench' -Branch 'main' } | Should Throw "This session already holds '$first' for Mine / x, and this is TheWorkBench / main"
+            @(Get-AllCalls).Count | Should Be 0
+            Get-VmTestLock -VMName $second | Should BeNullOrEmpty
+        }
+        It 'a lock from before sessions is claimed by the session that carries on with it' {
+            Reset-Locks
+            Use-FakePool -FreeGB 64 @{ $first = (New-FakeVM -State 'Running'); $second = (New-FakeVM) }
+            New-Item -ItemType Directory $env:VMTEST_STATE -Force | Out-Null
+            @{ repo = 'Mine'; branch = 'x'; checkpoint = $mine.Checkpoint; since = (Get-Date).AddMinutes(-5).ToString('s'); v = 2 } | ConvertTo-Json |
+                Set-Content (Join-Path $env:VMTEST_STATE 'lock.json')
+            Use-Session 2
+            Invoke-VmTestBegin -Repo 'Mine' -Branch 'x' | Should Not Match 'took it over'
+            (Get-VmTestLock -VMName $first).pid | Should Be 2
+            Use-Session 1
+            { Invoke-VmTestBegin -Repo 'Mine' -Branch 'x' } | Should Throw 'another Claude session that is still open'
+        }
+        It 'counts a session as closed when its process id now belongs to a newer process' {
+            Reset-Locks
+            Use-FakePool -FreeGB 64 @{ $first = (New-FakeVM -State 'Running'); $second = (New-FakeVM) }
+            Set-HeldBy 1 $first $mine 5
+            $global:FakeProcs['1'] = '2026-10-22T12:00:00'
+            try { InModuleScope VmTest { Test-HolderOpen (Get-VmTestLock $env:VMTEST_VM) } | Should Be $false }
+            finally { $global:FakeProcs['1'] = '2026-10-22T09:00:00' }
+        }
+        It "counts a session as open when its process exists but its start time can't be read" {
+            Reset-Locks
+            Use-FakePool -FreeGB 64 @{ $first = (New-FakeVM -State 'Running'); $second = (New-FakeVM) }
+            Set-HeldBy 1 $first $mine 5
+            $global:FakeProcs['1'] = 'unknown'
+            try { InModuleScope VmTest { Test-HolderOpen (Get-VmTestLock $env:VMTEST_VM) } | Should Be $true }
+            finally { $global:FakeProcs['1'] = '2026-10-22T09:00:00' }
+        }
+        It 'begin -Force takes over its own task from an open session, and says it was forced' {
+            Reset-Locks
+            Use-FakePool -FreeGB 64 @{ $first = (New-FakeVM -State 'Running'); $second = (New-FakeVM) }
+            Set-HeldBy 1 $first $mine 5
+            Use-Session 2
+            Invoke-VmTestBegin -Repo 'Mine' -Branch 'x' -Force | Should Match 'took it over from an open session, with -Force'
+            @(Get-AllCalls | Where-Object { $_ -like '*restore*' }).Count | Should Be 0
+        }
+        It "end -Force resets another open session's VM on this task only with -VM, and tells that session" {
+            Reset-Locks
+            Use-FakePool -FreeGB 64 @{ $first = (New-FakeVM -State 'Running'); $second = (New-FakeVM) }
+            Set-HeldBy 1 $first $mine 5
+            Use-Session 2
+            { Invoke-VmTestEnd -Repo 'Mine' -Branch 'x' -Force } | Should Throw 'another Claude session that is still open'
+            Invoke-VmTestEnd -Repo 'Mine' -Branch 'x' -Force -VM $first | Should Match "Put '$first' back to 'Clean'"
+            Use-Session 1
+            $err = $null
+            try { Assert-TaskHasVM -Repo 'Mine' -Branch 'x' } catch { $err = $_ }
+            $err.Exception.Message | Should Match "another session on this task ran 'vmtest end -Force' and put '$first' back to Clean"
+        }
+        It 'save works from another session once the holder has closed' {
+            Reset-Locks
+            Use-FakePool -FreeGB 64 @{ $first = (New-FakeVM -State 'Running'); $second = (New-FakeVM) }
+            Set-HeldBy 3 $first $mine 5
+            Use-Session 2
+            Invoke-VmTestSave -Repo 'Mine' -Branch 'x' | Should Match 'and released it'
+            Get-VmTestLock -VMName $first | Should BeNullOrEmpty
+        }
+        It "lets the user's own terminal (outside Claude Code) use a VM an open session holds" {
+            Reset-Locks
+            Use-FakePool -FreeGB 64 @{ $first = (New-FakeVM -State 'Running'); $second = (New-FakeVM) }
+            Set-HeldBy 1 $first $mine 5
+            Remove-Item Env:\CLAUDE_PID, Env:\CLAUDE_CODE_SESSION_ID
+            { Assert-TaskHasVM -Repo 'Mine' -Branch 'x' } | Should Not Throw
+            Invoke-VmTestSave -Repo 'Mine' -Branch 'x' | Should Match 'and released it'
+        }
+        } finally {
+            Remove-Item Env:\CLAUDE_PID, Env:\CLAUDE_CODE_SESSION_ID -ErrorAction SilentlyContinue
+            Remove-Variable -Scope Global FakeProcs -ErrorAction SilentlyContinue
+        }
     }
     It 'shows the time a VM was taken in a form that reads aloud well' {
         $t = (Get-Date).Date.AddHours(15).AddMinutes(4).ToString('s')
