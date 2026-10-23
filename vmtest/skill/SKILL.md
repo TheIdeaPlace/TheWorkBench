@@ -30,8 +30,36 @@ every command works on the test VM your task holds.
 powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$env:VMTEST_HOME\vmtest.ps1" <command> [args]
 ```
 
+**Run every command from that same folder.** Between commands, the shell can go back to the
+folder the session started in, and vmtest run from another repo or branch is a different task: it
+holds no VM, or takes a second one. So `cd` into the repo in the same command as vmtest every time
+(`cd C:\path\to\repo; powershell ... vmtest.ps1 windows`), or pass `-Repo` and `-Branch` on every
+command. The same goes for tools built on vmtest. If a command says your task doesn't hold a test
+VM and names one "this session holds", you ran it from the wrong folder; nothing is lost.
+
 If `begin` says there's no test VM, or no Clean checkpoint, the one-time setup in vmtest's README
 hasn't been done. Tell the user rather than testing on their PC.
+
+## Sharing the VMs with other sessions
+
+Several sessions share a small pool of VMs. Each VM belongs to one task at a time, and vmtest
+records which Claude session took it.
+
+- **Never take a VM another session holds.** Don't use `-Force` on `begin` or `end`, delete lock
+  files, or run `end -VM` on a VM you don't hold, unless the user tells you to. Each of those
+  throws away the other session's unsaved work, and that session finds its VM gone.
+- **One session per branch.** Two sessions on the same repo and branch are the same task. While the
+  first session is open, vmtest keeps the second off its VM. If you're the second, work on your own
+  branch or worktree, or wait with `begin -Wait`; if that times out, ask the user.
+- **One VM per session.** `begin` won't give a session a second VM for another task; that's nearly
+  always the wrong folder. To move on to another task, `save` or `end` the first one from its folder.
+- **Give the VM back when you stop using it.** `save` when you go off to other work for a while or
+  wait on the user; `end` once the work has merged. A VM left idle is saved for its task and handed
+  to a waiting one: after two hours once its session has closed, after eight while it's still open.
+- **If your VM is gone, read the message.** It says whether the VM was saved for you after sitting
+  idle (nothing lost: `begin` carries on from the save), was taken with `-Force` (unsaved state
+  lost: tell the user which task took it), or whether you ran from the wrong folder. Don't just
+  tell the user the VM disappeared, and don't take another session's VM to make up for it.
 
 ## The flow
 
@@ -43,8 +71,10 @@ freedom stops at the VM itself.
    - If every VM is busy, it says who holds each one. Don't keep checking back: run
      `begin -Wait -Timeout 3600` in the background, which takes the first VM that frees up. Don't
      use `-Force` unless the user says so.
-   - A task that has left its VM unused for two hours is saved for it and its VM handed on, so a
-     wait never lasts forever.
+   - A task that has left its VM unused for two hours (eight while its session is still open) is
+     saved for it and its VM handed on, so a wait never lasts forever.
+   - If another open session on this repo and branch has the VM, `begin` says so. See "Sharing the
+     VMs with other sessions".
    - It carries on from this task's last state, or starts from Clean. If it says this task's
      checkpoint is on a busy VM and it started from Clean, put back what you need, or wait for that
      VM with `begin -VM <name> -Wait`.
@@ -67,7 +97,8 @@ freedom stops at the VM itself.
    whenever you'll be away from the VM for a while, such as waiting on the user, so others can use it.
 6. After this task's work has merged, run `end`. It deletes this task's checkpoints and puts its VM back to Clean.
 
-`status` lists every VM, who holds it and when they last used it.
+`status` lists every VM, who holds it, whether that Claude session is still open, and when they
+last used it.
 
 ## Running a repo's tests in the VM
 

@@ -41,6 +41,7 @@ Settings can be changed with environment variables:
 | `VMTEST_VM` | The first VM, the one the others are copied from | `ClaudeTesting` |
 | `VMTEST_POOL` | How many VMs (`3`), or their names (`ClaudeTesting,TestB`), the first one first | From this PC's memory and processors, 1 to 3 |
 | `VMTEST_STALE_MINUTES` | How long a task can leave its VM unused before another task's `begin` may save it and take it; `0` for never | `120` |
+| `VMTEST_OPEN_STALE_MINUTES` | The same, while the Claude session holding the VM is still open; `0` for never | `480` |
 | `VMTEST_RESERVE_GB` | Memory kept for this PC: a VM isn't started unless this much would still be free | `4` |
 | `VMTEST_USER`, `VMTEST_PASSWORD` | The VM's test account | `vmuser`, `vmadmin` |
 | `VMTEST_STATE` | The folder for the locks | `%LOCALAPPDATA%\vmtest` |
@@ -97,8 +98,23 @@ powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$env:VMTEST
 - **One task per VM.** Each VM has its own lock, and a task holds at most one VM. Every command that works inside a VM uses the one its task holds.
   - `begin` takes a free VM. If every VM is busy, it says who holds each one and when they last used it.
   - A task that has left its VM unused for `VMTEST_STALE_MINUTES` (two hours) is saved for it, not thrown away, and its VM goes to the waiting task. Its next `begin` carries on from that save.
+  - While the Claude session holding the VM is still open, that wait is `VMTEST_OPEN_STALE_MINUTES` (eight hours) instead, since the session may just be busy with other work.
   - `-Force` takes the longest-unused VM anyway, and anything that task hadn't saved is lost.
   - Commands that change a VM wait for each other, so two sessions can't take the same one.
+- **One session per task.** A lock records the Claude session that took it (from `CLAUDE_PID` and
+  `CLAUDE_CODE_SESSION_ID`, which Claude Code sets). A task is a repo and branch, so two sessions on
+  the same branch would otherwise share one VM and undo each other's work.
+  - While that session is open, another session on the same task can't use, save or end the VM.
+    Its `begin` says so, as an error `-Wait` waits out.
+  - Once the session has closed, or left the VM idle as long as above, the next session's `begin`
+    takes the VM over where it is.
+  - A lock taken by an older vmtest belongs to anyone running its task, until a session's `begin` claims it.
+  - Commands run outside Claude Code (you, at your own terminal) aren't kept out.
+  - A session that already holds a VM can't `begin` a second task without `-Force`: that's nearly
+    always vmtest run from the wrong folder. `save` the first task to move on to another.
+- **A VM never just vanishes.** When a task's VM went to another task, its next command says which,
+  when, and whether anything was lost. When a session runs vmtest from the wrong folder (so it asks
+  about the wrong task), the message names the VM and task the session does hold.
 - **Admin rights.** Programs run without admin rights by default, the way a normal user would run them.
   - Add `-Elevated` to `run`, `launch` or the UI commands for per-machine installs, or to drive the
     window of a program running as administrator.
@@ -200,6 +216,9 @@ exist. They cover:
 - the lock, `save`, `end`, `prepare` and `run`'s argument checks;
 - the pool: which VM `begin` picks, saving an idle task, the memory check, `-Wait`, per-VM locks,
   the pool's size and names, and that `prepare -Pool` never touches a VM it didn't make;
+- Claude sessions: which session holds a lock, longer idle time for open sessions, keeping a second
+  session off the same task, taking over from a closed one, and the notes a task gets when its VM
+  was taken;
 - reading who is signed in.
 
 What was checked by hand on the Arm64 Surface host (Windows 11 build 26340, VM build 26300):

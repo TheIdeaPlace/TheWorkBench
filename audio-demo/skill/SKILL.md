@@ -34,7 +34,9 @@ written for one screen reader's clips must be checked line by line against the o
   `$data = if ($env:AUDIODEMO_DATA) { $env:AUDIODEMO_DATA } else { "$env:LOCALAPPDATA\audio-demo" }`
   and `$py = "$data\venv\Scripts\python.exe"`. Run tools as `& $py -I <tool>.py ...`.
 - vmtest: the vmtest skill. Read it before the first VM command. The tools find vmtest through
-  `VMTEST_HOME`, or next to this project in TheWorkBench.
+  `VMTEST_HOME`, or next to this project in TheWorkBench. Like vmtest, every tool works on the VM
+  held by the repo and branch it runs from, so `cd` into the app's repo in the same command as
+  each tool; from any other folder it finds no VM, or takes another one.
 - A **project folder** per demo: `script.txt`, `steps\`, `clips\`, `cache\`, `out\`. Keep it
   outside any git repository. A delivery folder (for example a synced test folder) gets the MP3s
   and a copy of the project.

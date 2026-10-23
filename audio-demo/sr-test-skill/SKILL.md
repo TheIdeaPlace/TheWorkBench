@@ -24,7 +24,9 @@ pacing and interruptions to the person's listening.
 - Tools: `$env:AUDIODEMO_HOME\tools`. The Python is `$data\venv\Scripts\python.exe`, where `$data` is
   `$env:AUDIODEMO_DATA`, or `%LOCALAPPDATA%\audio-demo` if that isn't set.
 - A project folder per app under test (outside any repo): `steps\`, `clips\`, `out\`.
-- vmtest: read the vmtest skill before the first VM command.
+- vmtest: read the vmtest skill before the first VM command. Like vmtest, every tool here works on
+  the VM held by the repo and branch it runs from, so `cd` into the app's repo in the same command
+  as each tool.
 
 ## The flow
 
