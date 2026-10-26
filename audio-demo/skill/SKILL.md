@@ -42,6 +42,8 @@ written for one screen reader's clips must be checked line by line against the o
   and a copy of the project.
 - `references\quickmail.md`: everything specific to QuickMail, and a model of what to write down
   for any other app.
+- `references\rssquick.md`: RSS Quick, including recording the Microsoft Store itself (search,
+  install, open) and keeping Edge's first-run screen out of open-in-browser demos.
 
 ## The flow
 
