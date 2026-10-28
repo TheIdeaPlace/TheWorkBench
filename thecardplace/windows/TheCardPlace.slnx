@@ -17,5 +17,6 @@
     <Project Path="tests/TheCardPlace.Play.Tests/TheCardPlace.Play.Tests.csproj" />
     <Project Path="tests/TheCardPlace.Sheephead.Tests/TheCardPlace.Sheephead.Tests.csproj" />
     <Project Path="tests/TheCardPlace.Spades.Tests/TheCardPlace.Spades.Tests.csproj" />
+    <Project Path="tests/TheCardPlace.UiTests/TheCardPlace.UiTests.csproj" />
   </Folder>
 </Solution>
