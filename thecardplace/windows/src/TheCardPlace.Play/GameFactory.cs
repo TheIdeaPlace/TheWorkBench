@@ -12,7 +12,8 @@ public static class GameFactory
         GameKind.Spades => new SpadesSession(settings, announcer, rng),
         GameKind.Euchre => new EuchreSession(settings, announcer, rng),
         GameKind.Sheephead => new SheepheadSession(settings, announcer, rng),
-        _ => throw new NotSupportedException($"{kind} is not ready yet"),
+        GameKind.Cribbage => new CribbageSession(settings, announcer, rng),
+        _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "not a game"),
     };
 
     public static IReadOnlyList<(string Heading, string Body)> Rules(GameKind kind) => kind switch
