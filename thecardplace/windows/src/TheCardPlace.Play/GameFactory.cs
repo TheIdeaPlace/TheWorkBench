@@ -10,6 +10,7 @@ public static class GameFactory
     {
         GameKind.Hearts => new HeartsSession(settings, announcer, rng),
         GameKind.Spades => new SpadesSession(settings, announcer, rng),
+        GameKind.Sheephead => new SheepheadSession(settings, announcer, rng),
         _ => throw new NotSupportedException($"{kind} is not ready yet"),
     };
 
