@@ -6,4 +6,8 @@
   <ItemGroup>
     <ProjectReference Include="..\TheCardPlace.Core\TheCardPlace.Core.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- The tests reach the word helpers (NameOf, Poss, Vb) the way Swift's @testable does. -->
+    <InternalsVisibleTo Include="TheCardPlace.Cribbage.Tests" />
+  </ItemGroup>
 </Project>
