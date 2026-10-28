@@ -6,4 +6,11 @@
   <ItemGroup>
     <ProjectReference Include="..\TheCardPlace.Core\TheCardPlace.Core.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <Using Include="TheCardPlace.Core" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The tests reach the scoring and the follow-suit rule directly, as Swift's @testable does. -->
+    <InternalsVisibleTo Include="TheCardPlace.Sheephead.Tests" />
+  </ItemGroup>
 </Project>
