@@ -155,10 +155,16 @@ public sealed class EuchreSession : GameSession<EuchreState, EuchreAction>
                 facts.Add(Prose.Count(p.TricksWon, "trick"));
                 return new SeatInfo(p.Index, p.Name, PositionOf(p.Index), string.Join(", ", facts), play?.Card,
                     play is null ? null : EuchreCards.Describe(play.Card, State.Trump), note,
-                    toAct == p.Index, p.Index == Me, p.Hand.Count);
+                    toAct == p.Index, p.Index == Me, p.Hand.Count,
+                    State.Phase switch { EuchrePhase.Bid1 or EuchrePhase.Bid2 => "bidding", EuchrePhase.Discard => "putting a card back", _ => "to play" });
             }).ToList();
         }
     }
+
+    public override IReadOnlyList<string> TableLines =>
+        State.Phase is EuchrePhase.HandOver or EuchrePhase.GameOver && EuchreReview.DealReveal(State) is { } reveal
+            ? [EuchreReview.LastTrick(State, Me), reveal]
+            : [EuchreReview.LastTrick(State, Me)];
 
     public override string TableNote => State.Phase switch
     {

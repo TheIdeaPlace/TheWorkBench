@@ -56,7 +56,6 @@ public partial class HubView : UserControl
         var gs = App.Settings.For(kind);
         GameTitle.Text = kind.Title();
         GameTagline.Text = kind.Tagline();
-        GamePlayers.Text = kind.PlayersDescription();
         PlayButton.Content = $"_Play {kind.Title()}";
         OptionsPanel.Children.Clear();
 

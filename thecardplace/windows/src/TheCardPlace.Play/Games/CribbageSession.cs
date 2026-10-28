@@ -148,6 +148,13 @@ public sealed class CribbageSession : GameSession<CribbageState, CribbageAction>
     }
 
     /// <summary>The middle of the table: the crib while it is thrown to, the count and the starter in the play, the hand being counted.</summary>
+    public override IReadOnlyList<string> TableLines => State.Phase switch
+    {
+        CribbagePhase.Play => [CribbageReview.Play(State, Me), CribbageReview.DealerAndCrib(State, Me)],
+        CribbagePhase.Count or CribbagePhase.RoundOver or CribbagePhase.GameOver => [CribbageReview.LastCount(State, Me), CribbageReview.DealerAndCrib(State, Me)],
+        _ => [CribbageReview.DealerAndCrib(State, Me)],
+    };
+
     public override string TableNote => State.Phase switch
     {
         CribbagePhase.Discard => CribText,
@@ -230,7 +237,7 @@ public sealed class CribbageSession : GameSession<CribbageState, CribbageAction>
         State.History.Where(h => h.GameNumber == State.GameNumber).Select(h => (IReadOnlyList<string>)
         [
             Num(h.HandNumber), Name(h.Dealer), .. h.Scores.Select(Num),
-        ]).ToList());
+        ]).ToList(), NamedFrom: 2);
 
     /// <summary>Whatever moves the game on: Cut, Throw, Go, Next and Deal take turns here.</summary>
     public override GameControl Primary => State.Phase switch

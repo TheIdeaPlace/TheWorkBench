@@ -134,10 +134,15 @@ public sealed class SheepheadSession : GameSession<SheepheadState, SheepheadActi
                 if (showPoints) facts.Add(Prose.Count(p.Points, "point"));
                 return new SeatInfo(p.Index, p.Name, PositionOf(p.Index), string.Join(", ", facts), play?.Card,
                     play is null ? null : SheepheadCards.Describe(play.Card), note,
-                    toAct == p.Index, p.Index == Me, p.Hand.Count);
+                    toAct == p.Index, p.Index == Me, p.Hand.Count,
+                    State.Phase switch { SheepheadPhase.Pick => "deciding", SheepheadPhase.Bury => "burying", _ => "to play" });
             }).ToList();
         }
     }
+
+    public override IReadOnlyList<string> TableLines => State.Phase == SheepheadPhase.HandOver
+        ? [SheepheadReview.LastTrick(State, Me), SheepheadReview.BlindReveal(State)]
+        : [SheepheadReview.LastTrick(State, Me)];
 
     /// <summary>The picker, the partner card or the partner once known, the leaster, the doublers the player knows of.</summary>
     public override string TableNote
@@ -204,7 +209,7 @@ public sealed class SheepheadSession : GameSession<SheepheadState, SheepheadActi
                 Num(h.HandNumber), picker, partner, h.Result.Label,
                 .. h.Result.Deltas.Select(d => d > 0 ? "+" + Num(d) : Num(d)),
             ];
-        }).ToList());
+        }).ToList(), NamedFrom: 4);
 
     public override GameControl Primary => State.Phase switch
     {

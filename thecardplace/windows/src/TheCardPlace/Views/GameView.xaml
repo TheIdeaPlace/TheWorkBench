@@ -86,6 +86,16 @@
 
             <!-- The numbers and the story so far. -->
             <DockPanel Grid.Column="1" Margin="12,6,12,10">
+                <Label DockPanel.Dock="Top" Content="_On the table" Target="{Binding ElementName=LinesList}" Style="{StaticResource PanelLabel}" />
+                <ListBox x:Name="LinesList" DockPanel.Dock="Top" MaxHeight="150" Style="{StaticResource QuietList}"
+                         ItemContainerStyle="{StaticResource TextItem}" AutomationProperties.Name="On the table"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled" GotKeyboardFocus="List_GotKeyboardFocus">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding}" TextWrapping="Wrap" />
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
                 <Label DockPanel.Dock="Top" x:Name="ScoresLabel" Content="_Scores" Target="{Binding ElementName=ScoresList}" Style="{StaticResource PanelLabel}" />
                 <ListView x:Name="ScoresList" DockPanel.Dock="Top" MaxHeight="210" FontSize="14" IsTextSearchEnabled="False"
                           KeyboardNavigation.TabNavigation="Once" AutomationProperties.Name="Scores" GotKeyboardFocus="List_GotKeyboardFocus">

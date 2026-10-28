@@ -49,6 +49,12 @@ public abstract class GameSession : IDisposable
     /// <summary>A line for the middle of the table: trump, the contract, the count. "" for none.</summary>
     public virtual string TableNote => "";
     public abstract ScoreTable Scores { get; }
+
+    /// <summary>
+    /// Lines for the "On the table" list: the last trick, the play so far, cards turned up at the
+    /// end of a hand. Text a sighted player sees on the table and would otherwise only be heard once.
+    /// </summary>
+    public virtual IReadOnlyList<string> TableLines => [];
     public virtual ScoreTable History => ScoreTable.Empty("Hands played");
 
     /// <summary>

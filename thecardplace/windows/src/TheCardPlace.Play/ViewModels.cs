@@ -32,7 +32,7 @@ public sealed record HandCard(Card Card, string Description, bool Playable = tru
 /// <param name="Played">The card this seat has put on the current trick, if any.</param>
 /// <param name="PlayedNote">"led", "winning so far".</param>
 public sealed record SeatInfo(int Seat, string Name, string Position, string Detail, Card? Played, string? PlayedDescription,
-    string? PlayedNote, bool IsTurn, bool IsMe, int CardsHeld)
+    string? PlayedNote, bool IsTurn, bool IsMe, int CardsHeld, string TurnWord = "to play")
 {
     public string AccessibleName
     {
@@ -41,7 +41,7 @@ public sealed record SeatInfo(int Seat, string Name, string Position, string Det
             var parts = new List<string> { IsMe ? Name + " (you)" : Name };
             if (Position.Length > 0) parts[0] += ", " + Position;
             if (Played is not null) parts.Add("played " + (PlayedDescription ?? Played.Value.Name) + (PlayedNote is { Length: > 0 } n ? ", " + n : ""));
-            if (IsTurn) parts.Add("to play");
+            if (IsTurn) parts.Add(TurnWord);
             if (Detail.Length > 0) parts.Add(Detail);
             return string.Join("; ", parts);
         }
@@ -51,9 +51,10 @@ public sealed record SeatInfo(int Seat, string Name, string Position, string Det
 /// <summary>
 /// A table of numbers that belong to players. Read row by row, with the first column unnamed and
 /// every other value preceded by its column name: "Ruth (you), score 12, tricks 3". Spoken order is
-/// on-screen order.
+/// on-screen order. Fixed headings are said in lower case mid-row ("score 12"); columns from
+/// <paramref name="NamedFrom"/> on are players' or sides' names and keep their capitals.
 /// </summary>
-public sealed record ScoreTable(string Title, IReadOnlyList<string> Columns, IReadOnlyList<IReadOnlyList<string>> Rows)
+public sealed record ScoreTable(string Title, IReadOnlyList<string> Columns, IReadOnlyList<IReadOnlyList<string>> Rows, int NamedFrom = int.MaxValue)
 {
     public static ScoreTable Empty(string title) => new(title, [], []);
 
@@ -64,7 +65,7 @@ public sealed record ScoreTable(string Title, IReadOnlyList<string> Columns, IRe
         for (var i = 0; i < r.Count; i++)
         {
             if (i == 0 || i >= Columns.Count || Columns[i].Length == 0) parts.Add(r[i]);
-            else parts.Add(Columns[i].ToLowerInvariant() + " " + r[i]);
+            else parts.Add((i >= NamedFrom ? Columns[i] : Columns[i].ToLowerInvariant()) + " " + r[i]);
         }
         return string.Join(", ", parts);
     }

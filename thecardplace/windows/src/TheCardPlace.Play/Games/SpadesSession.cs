@@ -94,6 +94,8 @@ public sealed class SpadesSession : GameSession<SpadesState, SpadesAction>
         }
     }
 
+    public override IReadOnlyList<string> TableLines => [SpadesReview.LastTrick(State)];
+
     public override string TableNote => State.Phase switch
     {
         SpadesPhase.Bidding => "Bidding",
@@ -117,7 +119,7 @@ public sealed class SpadesSession : GameSession<SpadesState, SpadesAction>
         [
             Num(h.Deal), Name(h.Dealer),
             .. Enumerable.Range(0, SpadesGame.Teams).Select(t => $"{SpadesGame.Signed(h.Delta[t])}, score {Num(h.Scores[t])}, {Prose.Count(h.Bags[t], "bag")}"),
-        ]).ToList());
+        ]).ToList(), NamedFrom: 2);
 
     public override GameControl Primary => State.Phase switch
     {

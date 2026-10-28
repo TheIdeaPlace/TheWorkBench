@@ -87,6 +87,8 @@ public sealed class HeartsSession : GameSession<HeartsState, HeartsAction>
         }
     }
 
+    public override IReadOnlyList<string> TableLines => [HeartsReview.LastTrick(State, Me)];
+
     public override string TableNote => State.Phase switch
     {
         HeartsPhase.Passing => State.PassDirection == HeartsPassDirection.Hold ? "No pass this hand" : $"Pass three cards {State.PassDirection.RecipientPhrase()}",
@@ -106,7 +108,7 @@ public sealed class HeartsSession : GameSession<HeartsState, HeartsAction>
         [
             Num(h.Deal), h.PassDirection.RawValue(),
             .. h.Points.Select((pts, i) => h.Shooter == i ? Num(pts) + ", shot the moon" : Num(pts)),
-        ]).ToList());
+        ]).ToList(), NamedFrom: 2);
 
     private static string Num(int n) => n.ToString(CultureInfo.InvariantCulture);
 

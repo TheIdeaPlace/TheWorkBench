@@ -23,6 +23,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        FitToScreen();
         _announcer = new Announcer(App.Settings.Announcements, new UiaSpeaker(this));
         _announcer.Announced += a => StatusText.Text = _announcer.LastText;
         PreviewKeyDown += Window_PreviewKeyDown;
@@ -35,6 +36,23 @@ public partial class MainWindow : Window
     }
 
     internal Announcer Announcer => _announcer;
+
+    /// <summary>
+    /// The designed size is 1180 by 820. On a smaller screen the window takes most of the work
+    /// area instead, and on one smaller still it opens maximized, so the title bar and the
+    /// controls at the bottom are never off screen.
+    /// </summary>
+    private void FitToScreen()
+    {
+        var area = SystemParameters.WorkArea;
+        if (area.Width < MinWidth + 40 || area.Height < MinHeight + 40)
+        {
+            WindowState = WindowState.Maximized;
+            return;
+        }
+        Width = Math.Min(Width, area.Width - 40);
+        Height = Math.Min(Height, area.Height - 40);
+    }
 
     // ---- pages ----
 

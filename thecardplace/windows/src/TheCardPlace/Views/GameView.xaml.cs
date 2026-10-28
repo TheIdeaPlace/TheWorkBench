@@ -86,6 +86,20 @@ public partial class GameView : UserControl
         RefreshTable(HistoryList, HistoryGrid, Session.History, ref _historyShape);
         HistoryLabel.Content = Session.History.Title.Length > 0 ? AccessText(Session.History.Title, 'p') : "Hands _played";
         RefreshLog();
+        RefreshLines();
+    }
+
+    private void RefreshLines()
+    {
+        var lines = Session.TableLines.Where(l => l.Length > 0).ToList();
+        if (LinesList.ItemsSource is List<string> old && old.SequenceEqual(lines)) return;
+        var focused = LinesList.IsKeyboardFocusWithin ? Math.Max(0, LinesList.SelectedIndex) : -1;
+        LinesList.ItemsSource = lines;
+        if (focused >= 0 && lines.Count > 0)
+        {
+            LinesList.SelectedIndex = Math.Min(focused, lines.Count - 1);
+            Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () => FocusList(LinesList));
+        }
     }
 
     /// <summary>Puts the access key on the given letter if the title has it, else leaves it bare.</summary>
