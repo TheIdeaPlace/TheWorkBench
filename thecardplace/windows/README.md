@@ -43,7 +43,7 @@ during a pause, and a remote seat.
 notifications a screen reader would speak. It checks Tab rings, single Tab stops, arrows in the
 hand, refusals, the review and status bar keys, and that each game opens with focus on something
 to do. **These take focus and type.** Run them on CI or in the test VM, never on a PC someone is
-using:
+using, and with no screen reader running (NVDA's keyboard hook swallows the synthetic arrow keys):
 
 ```
 dotnet test tests/TheCardPlace.UiTests -c Release
