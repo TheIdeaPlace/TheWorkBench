@@ -148,7 +148,7 @@ public sealed class HeartsSession : GameSession<HeartsState, HeartsAction>
                 }
                 if (_selected.Remove(item.Card))
                 {
-                    Announcer.Say($"{item.Card.Name} removed. {SelectionSummary}");
+                    Announcer.Say($"Removed. {SelectionSummary}");
                 }
                 else if (_selected.Count >= HeartsGame.PassCount)
                 {
@@ -158,7 +158,8 @@ public sealed class HeartsSession : GameSession<HeartsState, HeartsAction>
                 else
                 {
                     _selected.Add(item.Card);
-                    Announcer.Say($"{item.Card.Name} chosen. {SelectionSummary}");
+                    // The card's own name now ends ", chosen", which the screen reader reads; this says only the count.
+                    Announcer.Say(SelectionSummary);
                     if (_selected.Count == HeartsGame.PassCount) Announcer.Say("Choose Pass to send them.", AnnouncementCategory.Hint);
                 }
                 RaiseChanged();

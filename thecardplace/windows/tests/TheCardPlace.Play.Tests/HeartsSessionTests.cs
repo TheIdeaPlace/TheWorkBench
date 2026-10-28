@@ -69,10 +69,10 @@ public class HeartsSessionTests
         Assert.False(s.Primary.Enabled);
         var cards = s.Hand.Take(4).ToList();
         s.Activate(cards[0]);
-        Assert.Equal($"{cards[0].Card.Name} chosen. One of three chosen.", heard[^1].Text);
+        Assert.Equal($"One of three chosen.", heard[^1].Text);
         Assert.Contains(", chosen", Table.CardIn(s, cards[0].Card).AccessibleName, StringComparison.Ordinal);
         s.Activate(Table.CardIn(s, cards[0].Card));
-        Assert.Equal($"{cards[0].Card.Name} removed. No cards chosen yet.", heard[^1].Text);
+        Assert.Equal($"Removed. No cards chosen yet.", heard[^1].Text);
         foreach (var c in cards.Take(3)) s.Activate(Table.CardIn(s, c.Card));
         Assert.EndsWith("Choose Pass to send them.", heard[^1].Text, StringComparison.Ordinal);
         s.Activate(Table.CardIn(s, cards[3].Card));

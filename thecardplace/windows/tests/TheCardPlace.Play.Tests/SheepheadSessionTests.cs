@@ -210,12 +210,12 @@ public class SheepheadSessionTests
 
         var cards = s.Hand.Take(3).Select(h => h.Card).ToList();
         s.Activate(Table.CardIn(s, cards[0]));
-        Assert.Equal($"{cards[0].Name} chosen. One of two chosen.", heard[^1].Text);
+        Assert.Equal($"One of two chosen.", heard[^1].Text);
         Assert.Contains(", chosen", Table.CardIn(s, cards[0]).AccessibleName, StringComparison.Ordinal);
         Assert.Equal("Bury 1 of 2", s.Primary.Title);
 
         s.Activate(Table.CardIn(s, cards[0]));
-        Assert.Equal($"{cards[0].Name} removed. No cards chosen yet.", heard[^1].Text);
+        Assert.Equal($"Removed. No cards chosen yet.", heard[^1].Text);
         Assert.False(Table.CardIn(s, cards[0]).Chosen);
 
         // Bury before two are chosen: refused, and the table is unchanged.

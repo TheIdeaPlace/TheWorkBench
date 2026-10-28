@@ -23,6 +23,8 @@ public sealed class UiaSpeaker : ISpeaker
 {
     private readonly Window _window;
     private readonly List<(string Text, bool Interrupt, string Id)> _held = [];
+    private readonly List<(string Text, bool Interrupt, string Id)> _pending = [];
+    private bool _flushScheduled;
 
     public UiaSpeaker(Window window)
     {
@@ -32,17 +34,41 @@ public sealed class UiaSpeaker : ISpeaker
 
     public void Speak(string text, bool interrupt, string activityId)
     {
+        _pending.Add((text, interrupt, activityId));
+        if (_flushScheduled) return;
+        _flushScheduled = true;
         _window.Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, () =>
         {
+            _flushScheduled = false;
+            var batch = Coalesce(_pending);
+            _pending.Clear();
             // The app is in front if any of its windows is: a dialog over the table counts, so
             // "Copied" in About is heard in About, not after it closes.
             if (ActiveWindow() is not { } active)
             {
-                _held.Add((text, interrupt, activityId));
+                _held.AddRange(batch);
                 return;
             }
-            Raise(active, text, interrupt, activityId);
+            foreach (var (t, i, id) in batch) Raise(active, t, i, id);
         });
+    }
+
+    /// <summary>
+    /// Messages that arrive together go out as few notifications as possible: queued ones next to
+    /// each other become one. A test run with NVDA lost one of three notifications raised in the
+    /// same instant; one notification cannot lose its middle.
+    /// </summary>
+    private static List<(string Text, bool Interrupt, string Id)> Coalesce(List<(string Text, bool Interrupt, string Id)> items)
+    {
+        var result = new List<(string Text, bool Interrupt, string Id)>();
+        foreach (var item in items)
+        {
+            if (!item.Interrupt && result.Count > 0 && !result[^1].Interrupt)
+                result[^1] = (result[^1].Text + " " + item.Text, false, item.Id);
+            else
+                result.Add(item);
+        }
+        return result;
     }
 
     private static Window? ActiveWindow() =>
@@ -57,7 +83,7 @@ public sealed class UiaSpeaker : ISpeaker
         _window.Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, () =>
         {
             var target = ActiveWindow() ?? _window;
-            foreach (var (t, _, id) in held) Raise(target, t, false, id);
+            foreach (var (t, _, id) in Coalesce(held.Select(h => (h.Text, false, h.Id)).ToList())) Raise(target, t, false, id);
         });
     }
 

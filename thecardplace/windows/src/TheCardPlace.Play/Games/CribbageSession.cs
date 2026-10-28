@@ -284,7 +284,7 @@ public sealed class CribbageSession : GameSession<CribbageState, CribbageAction>
                 }
                 if (_selected.Remove(item.Card))
                 {
-                    Announcer.Say($"{item.Card.Name} removed. {SelectionSummary}");
+                    Announcer.Say($"Removed. {SelectionSummary}");
                 }
                 else if (_selected.Count >= 2)
                 {
@@ -294,7 +294,8 @@ public sealed class CribbageSession : GameSession<CribbageState, CribbageAction>
                 else
                 {
                     _selected.Add(item.Card);
-                    Announcer.Say($"{item.Card.Name} chosen. {SelectionSummary}");
+                    // The card's own name now ends ", chosen", which the screen reader reads; this says only the count.
+                    Announcer.Say(SelectionSummary);
                     if (_selected.Count == 2) Announcer.Say("Choose Throw to send them to the crib.", AnnouncementCategory.Hint);
                 }
                 RaiseChanged();

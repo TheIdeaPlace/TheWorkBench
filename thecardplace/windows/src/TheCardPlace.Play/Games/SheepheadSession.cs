@@ -272,7 +272,7 @@ public sealed class SheepheadSession : GameSession<SheepheadState, SheepheadActi
                 }
                 if (_selected.Remove(item.Card))
                 {
-                    Announcer.Say($"{item.Card.Name} removed. {SelectionSummary}");
+                    Announcer.Say($"Removed. {SelectionSummary}");
                 }
                 else if (_selected.Count >= BuryCount)
                 {
@@ -282,7 +282,8 @@ public sealed class SheepheadSession : GameSession<SheepheadState, SheepheadActi
                 else
                 {
                     _selected.Add(item.Card);
-                    Announcer.Say($"{item.Card.Name} chosen. {SelectionSummary}");
+                    // The card's own name now ends ", chosen", which the screen reader reads; this says only the count.
+                    Announcer.Say(SelectionSummary);
                     if (_selected.Count == BuryCount) Announcer.Say("Choose Bury to put them down.", AnnouncementCategory.Hint);
                 }
                 RaiseChanged();

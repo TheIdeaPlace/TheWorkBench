@@ -152,11 +152,11 @@ public class CribbageSessionTests
         Assert.Equal("Throw 0 of 2 to the crib", s.Primary.Title);
         var cards = s.Hand.Take(3).ToList();
         s.Activate(cards[0]);
-        Assert.Equal($"{cards[0].Card.Name} chosen. One of two chosen.", heard[^1].Text);
+        Assert.Equal($"One of two chosen.", heard[^1].Text);
         Assert.Contains(", chosen", Table.CardIn(s, cards[0].Card).AccessibleName, StringComparison.Ordinal);
         Assert.Equal("Throw 1 of 2 to the crib", s.Primary.Title);
         s.Activate(Table.CardIn(s, cards[0].Card));
-        Assert.Equal($"{cards[0].Card.Name} removed. No cards chosen yet.", heard[^1].Text);
+        Assert.Equal($"Removed. No cards chosen yet.", heard[^1].Text);
         Assert.False(Table.CardIn(s, cards[0].Card).Chosen);
 
         s.Activate(Table.CardIn(s, cards[0].Card));

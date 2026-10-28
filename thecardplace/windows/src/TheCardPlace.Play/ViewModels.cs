@@ -97,7 +97,11 @@ public sealed class GameControl
     /// <summary>A key without modifiers that presses it from anywhere in the game.</summary>
     public char? Key { get; }
     public bool Enabled { get; }
-    /// <summary>Said by the control when dimmed: why it is not ready.</summary>
+    /// <summary>
+    /// Why a dimmed control is not ready, in a few words. Not attached to the control (a tooltip
+    /// becomes help text, which screen readers read on every visit); pressing the control says
+    /// the full reason instead. Kept so a front end with room for it can show it.
+    /// </summary>
     public string Hint { get; }
     public ControlKind Kind { get; init; } = ControlKind.Button;
 

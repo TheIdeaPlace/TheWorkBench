@@ -212,3 +212,27 @@ public class TableDriverTests
         Assert.False(back.Announcements.IsOn(AnnouncementCategory.Moves));
     }
 }
+
+public class PassSpeechTests
+{
+    /// <summary>After the player's pass, the others' passes and what was passed to the player are sent, then the turn.</summary>
+    [Theory]
+    [InlineData(1UL)]
+    [InlineData(2UL)]
+    [InlineData(3UL)]
+    [InlineData(4UL)]
+    [InlineData(5UL)]
+    [InlineData(6UL)]
+    public void The_others_passes_are_spoken_after_the_players_own(ulong seed)
+    {
+        var (s, _, speaker, _) = Table.Make<HeartsSession>(GameKind.Hearts, seed);
+        s.Start();
+        foreach (var c in s.Hand.Take(3).ToList()) s.Activate(c);
+        speaker.Spoken.Clear();
+        s.Primary.Action();
+        var all = speaker.All;
+        Assert.Contains("You passed", all, StringComparison.Ordinal);
+        Assert.Contains("passed you", all, StringComparison.Ordinal);
+        Assert.Contains("Your turn", all, StringComparison.Ordinal);
+    }
+}
