@@ -14,6 +14,7 @@
     <Project Path="tests/TheCardPlace.Cribbage.Tests/TheCardPlace.Cribbage.Tests.csproj" />
     <Project Path="tests/TheCardPlace.Euchre.Tests/TheCardPlace.Euchre.Tests.csproj" />
     <Project Path="tests/TheCardPlace.Hearts.Tests/TheCardPlace.Hearts.Tests.csproj" />
+    <Project Path="tests/TheCardPlace.Play.Tests/TheCardPlace.Play.Tests.csproj" />
     <Project Path="tests/TheCardPlace.Sheephead.Tests/TheCardPlace.Sheephead.Tests.csproj" />
     <Project Path="tests/TheCardPlace.Spades.Tests/TheCardPlace.Spades.Tests.csproj" />
   </Folder>
