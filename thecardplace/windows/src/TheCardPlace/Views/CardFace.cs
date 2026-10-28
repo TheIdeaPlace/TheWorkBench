@@ -24,8 +24,8 @@ public sealed class CardFace : Border
         nameof(Badge), typeof(string), typeof(CardFace), new PropertyMetadata(null, (d, _) => ((CardFace)d).Render()));
 
     private readonly TextBlock _corner = new() { FontWeight = FontWeights.Bold, FontSize = 17, LineHeight = 17, Margin = new Thickness(6, 3, 0, 0), HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top, TextAlignment = TextAlignment.Center };
-    private readonly TextBlock _pip = new() { FontSize = 38, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 6, 0, 0) };
-    private readonly TextBlock _badge = new() { FontSize = 11, FontWeight = FontWeights.SemiBold, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Bottom, Margin = new Thickness(2, 0, 2, 4), TextTrimming = TextTrimming.CharacterEllipsis };
+    private readonly TextBlock _pip = new() { FontSize = 36, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 8, 0) };
+    private readonly TextBlock _badge = new() { FontSize = 11, FontWeight = FontWeights.SemiBold, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Bottom, Margin = new Thickness(5, 0, 2, 4), TextWrapping = TextWrapping.Wrap, MaxWidth = 44 };
     private readonly TextBlock _off = new() { Text = "✕", FontSize = 15, FontWeight = FontWeights.Bold, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 3, 6, 0) };
 
     public CardFace()

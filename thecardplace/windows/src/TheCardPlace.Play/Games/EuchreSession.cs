@@ -382,6 +382,7 @@ public sealed class EuchreSession : GameSession<EuchreState, EuchreAction>
         {
             case EuchrePhase.Bid1 or EuchrePhase.Bid2 when IsMyTurn:
                 Announcer.Say(Prompt, AnnouncementCategory.Turn);
+                RequestFocusChoices();
                 break;
             case EuchrePhase.Discard when IsDealer:
                 // The engine has already said "You took the upcard. Choose a card to put back."

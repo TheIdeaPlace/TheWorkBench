@@ -91,7 +91,7 @@ public sealed class HeartsSession : GameSession<HeartsState, HeartsAction>
 
     public override string TableNote => State.Phase switch
     {
-        HeartsPhase.Passing => State.PassDirection == HeartsPassDirection.Hold ? "No pass this hand" : $"Pass three cards {State.PassDirection.RecipientPhrase()}",
+        HeartsPhase.Passing => State.PassDirection == HeartsPassDirection.Hold ? "No pass this hand" : $"Pass three cards to {State.PassDirection.RecipientPhrase()}",
         HeartsPhase.Play => State.HeartsBroken ? "Hearts are broken" : "Hearts not broken",
         _ => "",
     };
@@ -187,7 +187,7 @@ public sealed class HeartsSession : GameSession<HeartsState, HeartsAction>
         {
             var n = _selected.Count;
             if (n == 0) return "No cards chosen yet.";
-            return $"{Prose.Number(n)} of three chosen" + (n == HeartsGame.PassCount ? ". Choose Pass to send them." : ".");
+            return Prose.AsSentence($"{Prose.Number(n)} of three chosen") + (n == HeartsGame.PassCount ? " Choose Pass to send them." : "");
         }
     }
 

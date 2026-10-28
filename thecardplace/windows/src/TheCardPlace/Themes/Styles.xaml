@@ -122,7 +122,7 @@
     <Style x:Key="HandItem" TargetType="ListBoxItem">
         <Setter Property="AutomationProperties.Name" Value="{Binding AccessibleName}" />
         <Setter Property="FocusVisualStyle" Value="{x:Null}" />
-        <Setter Property="Margin" Value="3,0" />
+        <!-- The FanPanel lays the cards out; the focused card comes to the front. -->
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ListBoxItem">
@@ -141,10 +141,12 @@
                             <Setter TargetName="Mark" Property="Visibility" Value="Visible" />
                         </DataTrigger>
                         <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter Property="Panel.ZIndex" Value="100" />
                             <Setter TargetName="Ring" Property="BorderThickness" Value="4" />
                             <Setter TargetName="Ring" Property="BorderBrush" Value="{DynamicResource Brush.Focus}" />
                         </Trigger>
                         <Trigger Property="IsMouseOver" Value="True">
+                            <Setter Property="Panel.ZIndex" Value="50" />
                             <Setter TargetName="Ring" Property="BorderThickness" Value="2" />
                             <Setter TargetName="Ring" Property="BorderBrush" Value="{DynamicResource Brush.OnFeltSoft}" />
                         </Trigger>
@@ -154,23 +156,30 @@
         </Setter>
     </Style>
 
-    <!-- A chair at the table: name, facts, and the card they have played to this trick. -->
+    <!-- A chair at the table: the card they have played to this trick, then their name and facts
+         beside it. Compact, so five or six chairs fit round a small window. -->
     <Style x:Key="SeatItem" TargetType="ListBoxItem">
         <Setter Property="AutomationProperties.Name" Value="{Binding AccessibleName}" />
         <Setter Property="FocusVisualStyle" Value="{x:Null}" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ListBoxItem">
-                    <Border x:Name="Plate" CornerRadius="10" Padding="10,6" MinWidth="150" BorderThickness="2"
+                    <Border x:Name="Plate" CornerRadius="10" Padding="8,6" BorderThickness="2"
                             BorderBrush="Transparent" Background="{DynamicResource Brush.Rail}">
-                        <StackPanel HorizontalAlignment="Center">
-                            <TextBlock Text="{Binding Title}" FontSize="16" FontWeight="Bold" HorizontalAlignment="Center"
-                                       Foreground="{DynamicResource Brush.OnFelt}" />
-                            <TextBlock Text="{Binding Detail}" FontSize="13" HorizontalAlignment="Center" TextAlignment="Center"
-                                       TextWrapping="Wrap" MaxWidth="190" Foreground="{DynamicResource Brush.OnFeltSoft}" />
-                            <v:CardFace Card="{Binding Played}" Margin="0,6,0,2" />
-                            <TextBlock Text="{Binding PlayedNote}" FontSize="12" HorizontalAlignment="Center"
-                                       Foreground="{DynamicResource Brush.OnFeltSoft}" />
+                        <StackPanel Orientation="Horizontal">
+                            <v:CardFace Card="{Binding Played}">
+                                <v:CardFace.LayoutTransform>
+                                    <ScaleTransform ScaleX="0.78" ScaleY="0.78" />
+                                </v:CardFace.LayoutTransform>
+                            </v:CardFace>
+                            <StackPanel VerticalAlignment="Center" Margin="8,0,2,0" Width="118">
+                                <TextBlock Text="{Binding Title}" FontSize="15" FontWeight="Bold" TextTrimming="CharacterEllipsis"
+                                           Foreground="{DynamicResource Brush.OnFelt}" />
+                                <TextBlock Text="{Binding Detail}" FontSize="12.5" TextWrapping="Wrap"
+                                           Foreground="{DynamicResource Brush.OnFeltSoft}" />
+                                <TextBlock Text="{Binding PlayedNote}" FontSize="12.5" FontStyle="Italic" TextWrapping="Wrap"
+                                           Foreground="{DynamicResource Brush.OnFelt}" />
+                            </StackPanel>
                         </StackPanel>
                     </Border>
                     <ControlTemplate.Triggers>

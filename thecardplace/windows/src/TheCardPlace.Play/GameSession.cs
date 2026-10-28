@@ -41,6 +41,9 @@ public abstract class GameSession : IDisposable
     /// <summary>The card the player's focus should move to, by id. Raised when it becomes their turn.</summary>
     public event Action<string>? FocusCardRequested;
 
+    /// <summary>Focus should move to the phase's choices (a bid, a pick). Raised when it becomes the player's turn to choose.</summary>
+    public event Action? FocusChoicesRequested;
+
     public abstract string Status { get; }
     public abstract IReadOnlyList<HandCard> Hand { get; }
     /// <summary>The most cards the hand holds in this game, so the hand area keeps its size.</summary>
@@ -107,6 +110,11 @@ public abstract class GameSession : IDisposable
     protected void RequestFocus(string? cardId)
     {
         if (cardId is not null && Settings.MoveFocusOnTurn) FocusCardRequested?.Invoke(cardId);
+    }
+
+    protected void RequestFocusChoices()
+    {
+        if (Settings.MoveFocusOnTurn) FocusChoicesRequested?.Invoke();
     }
 
     protected void AddLog(string text) => _log.Insert(0, text);

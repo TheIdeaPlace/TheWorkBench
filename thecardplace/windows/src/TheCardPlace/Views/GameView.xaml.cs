@@ -35,6 +35,7 @@ public partial class GameView : UserControl
         PreviewTextInput += View_PreviewTextInput;
         session.Changed += QueueRefresh;
         session.FocusCardRequested += id => Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () => FocusCard(id));
+        session.FocusChoicesRequested += () => Dispatcher.BeginInvoke(DispatcherPriority.Loaded, FocusChoices);
     }
 
     public GameSession Session { get; }
@@ -44,10 +45,7 @@ public partial class GameView : UserControl
     {
         Session.Start();
         Refresh();
-        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () =>
-        {
-            if (!HandList.IsKeyboardFocusWithin) FocusHand();
-        });
+        Fallback(FocusHand);
     }
 
     public void NewGame()
@@ -78,6 +76,7 @@ public partial class GameView : UserControl
     {
         StatusLine.Text = Session.Status;
         TableNote.Text = Session.TableNote;
+        TableNote.Visibility = Session.TableNote.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
         RefreshHand();
         RefreshSeats();
         RefreshControls();
@@ -91,7 +90,7 @@ public partial class GameView : UserControl
 
     private void RefreshLines()
     {
-        var lines = Session.TableLines.Where(l => l.Length > 0).ToList();
+        var lines = new[] { Session.TableNote }.Concat(Session.TableLines).Where(l => l.Length > 0).ToList();
         if (LinesList.ItemsSource is List<string> old && old.SequenceEqual(lines)) return;
         var focused = LinesList.IsKeyboardFocusWithin ? Math.Max(0, LinesList.SelectedIndex) : -1;
         LinesList.ItemsSource = lines;
@@ -146,11 +145,11 @@ public partial class GameView : UserControl
         {
             var next = Math.Min(focusedIndex, _hand.Count - 1);
             var id = _hand[next].Id;
-            Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () => FocusCard(id));
+            Fallback(() => FocusCard(id));
         }
         else if (focusedId is not null && _hand.Count == 0)
         {
-            Dispatcher.BeginInvoke(DispatcherPriority.Loaded, FocusPrimary);
+            Fallback(FocusPrimary);
         }
     }
 
@@ -181,6 +180,7 @@ public partial class GameView : UserControl
         SetButton(PrimaryButton, primary);
 
         var wanted = Session.Secondary;
+        ControlsPanel.Visibility = wanted.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         var keep = new HashSet<string>(wanted.Select(KeyOf));
         foreach (var id in _secondary.Keys.Where(k => !keep.Contains(k)).ToList())
         {
@@ -188,7 +188,7 @@ public partial class GameView : UserControl
             var hadFocus = gone.IsKeyboardFocusWithin;
             ControlsPanel.Children.Remove(gone);
             _secondary.Remove(id);
-            if (hadFocus) Dispatcher.BeginInvoke(DispatcherPriority.Loaded, FocusPrimary);
+            if (hadFocus) Fallback(FocusPrimary);
         }
         for (var i = 0; i < wanted.Count; i++)
         {
@@ -204,10 +204,10 @@ public partial class GameView : UserControl
                 Update(el, c);
             }
             var at = ControlsPanel.Children.IndexOf(el);
-            if (at != i + 1)
+            if (at != i)
             {
                 if (at >= 0) ControlsPanel.Children.RemoveAt(at);
-                ControlsPanel.Children.Insert(Math.Min(i + 1, ControlsPanel.Children.Count), el);
+                ControlsPanel.Children.Insert(Math.Min(i, ControlsPanel.Children.Count), el);
             }
         }
     }
@@ -332,7 +332,30 @@ public partial class GameView : UserControl
 
     public void FocusLog() => FocusList(LogList);
 
+    /// <summary>
+    /// Where focus goes when the control that had it has gone (a card played, a bid button
+    /// removed), but only if nothing else has taken it by then: a turn that has just come round
+    /// moves focus to the cards or the choices, and that must win over this.
+    /// </summary>
+    private void Fallback(Action focus) =>
+        Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, () =>
+        {
+            if (!IsKeyboardFocusWithin && IsVisible) focus();
+        });
+
     private void FocusPrimary() => PrimaryButton.Focus();
+
+    /// <summary>The first of the phase's choices: the bid amount, Order it up, Pick up the blind.</summary>
+    private void FocusChoices()
+    {
+        ControlsPanel.UpdateLayout();
+        foreach (var el in ControlsPanel.Children.OfType<FrameworkElement>())
+        {
+            var target = el is StackPanel { Children: [_, ComboBox combo] } ? combo : el;
+            if (target.Focusable && target.IsVisible && target.Focus()) return;
+        }
+        FocusPrimary();
+    }
 
     private void FocusCard(string id)
     {
@@ -374,10 +397,30 @@ public partial class GameView : UserControl
     private HandItem? FocusedCard =>
         Keyboard.FocusedElement is ListBoxItem { DataContext: HandItem h } && HandList.IsKeyboardFocusWithin ? h : null;
 
+    /// <summary>
+    /// The hand's keys, by position in the hand rather than by where cards fall on screen (they
+    /// overlap): Left and Up the previous card, Right and Down the next, Home and End the ends.
+    /// Enter or Space plays or chooses the card.
+    /// </summary>
     private void HandList_PreviewKeyDown(object sender, KeyEventArgs e)
     {
-        if (Keyboard.Modifiers != ModifierKeys.None) return;
-        if (e.Key is Key.Enter or Key.Space && FocusedCard is { } card)
+        if (Keyboard.Modifiers != ModifierKeys.None || FocusedCard is not { } card) return;
+        var i = _hand.IndexOf(card);
+        int? to = e.Key switch
+        {
+            Key.Left or Key.Up => Math.Max(0, i - 1),
+            Key.Right or Key.Down => Math.Min(_hand.Count - 1, i + 1),
+            Key.Home => 0,
+            Key.End => _hand.Count - 1,
+            _ => null,
+        };
+        if (to is { } t)
+        {
+            e.Handled = true;
+            if (t != i) FocusCard(_hand[t].Id);
+            return;
+        }
+        if (e.Key is Key.Enter or Key.Space)
         {
             e.Handled = true;
             Session.Activate(card.Source);

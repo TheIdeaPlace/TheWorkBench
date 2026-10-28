@@ -218,13 +218,14 @@ public sealed class SpadesSession : GameSession<SpadesState, SpadesAction>
         Act(new SpadesAction.NextHand());
     }
 
-    /// <summary>At the bid, focus goes to the bid box rather than the cards; the hand is still there to read.</summary>
+    /// <summary>At the bid, focus goes to the bid amount rather than the cards; the hand is still there to read.</summary>
     protected override void TurnCameToMe()
     {
         if (State.Phase == SpadesPhase.Bidding && IsMyTurn)
         {
             _bid = ClampedBid;
             Announcer.Say(Status, AnnouncementCategory.Turn);
+            RequestFocusChoices();
             return;
         }
         base.TurnCameToMe();

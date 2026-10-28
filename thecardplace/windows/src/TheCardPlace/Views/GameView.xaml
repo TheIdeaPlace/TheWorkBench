@@ -15,6 +15,9 @@
             <DockPanel>
                 <Label DockPanel.Dock="Left" Content="Stat_us" Target="{Binding ElementName=StatusLine}" Style="{StaticResource FeltLabel}"
                        VerticalAlignment="Center" Margin="0,0,8,0" />
+                <!-- The table's note (trump, the count, the pass) under the status, where no seat can cover it. -->
+                <TextBlock x:Name="TableNote" DockPanel.Dock="Bottom" FontSize="14" TextWrapping="Wrap" Margin="2,2,0,0"
+                           Foreground="{DynamicResource Brush.OnFeltSoft}" />
                 <TextBox x:Name="StatusLine" IsReadOnly="True" IsReadOnlyCaretVisible="True" FontSize="17" FontWeight="SemiBold"
                          BorderThickness="0" Background="Transparent" Foreground="{DynamicResource Brush.OnFelt}"
                          CaretBrush="{DynamicResource Brush.OnFelt}" TextWrapping="Wrap" AutomationProperties.Name="Status"
@@ -40,9 +43,6 @@
                 <Grid Grid.Row="0" Margin="12,8,12,4">
                     <Label Content="Ta_ble" Target="{Binding ElementName=TableList}" Style="{StaticResource FeltLabel}"
                            HorizontalAlignment="Left" VerticalAlignment="Top" />
-                    <TextBlock x:Name="TableNote" HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center"
-                               TextWrapping="Wrap" MaxWidth="260" FontSize="15" FontWeight="SemiBold" IsHitTestVisible="False"
-                               Foreground="{DynamicResource Brush.OnFelt}" />
                     <ListBox x:Name="TableList" Style="{StaticResource QuietList}" Background="Transparent" BorderThickness="0"
                              ItemContainerStyle="{StaticResource SeatItem}" AutomationProperties.Name="Table"
                              ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Disabled"
@@ -67,20 +67,23 @@
                                  PreviewMouseLeftButtonUp="HandList_PreviewMouseLeftButtonUp">
                             <ListBox.ItemsPanel>
                                 <ItemsPanelTemplate>
-                                    <WrapPanel Orientation="Horizontal" />
+                                    <v:FanPanel />
                                 </ItemsPanelTemplate>
                             </ListBox.ItemsPanel>
                         </ListBox>
                     </StackPanel>
                 </Border>
 
-                <!-- The controls: the action that moves the game on comes first, always in the
-                     same place; the phase's other choices follow. -->
+                <!-- The controls. The phase's choices (a bid amount, Bid nil, Go alone) sit in a row
+                     above; the action that moves the game on is always the button in the lower
+                     left, last in the Tab order so a choice is made before it is confirmed. -->
                 <Border Grid.Row="2" Background="{DynamicResource Brush.Rail}" Padding="12,2,12,6" BorderThickness="0,1,0,0"
                         BorderBrush="{DynamicResource Brush.Felt}">
-                    <WrapPanel x:Name="ControlsPanel" Margin="0,6,0,0" KeyboardNavigation.TabNavigation="Local">
-                        <Button x:Name="PrimaryButton" Style="{StaticResource PrimaryButton}" Click="PrimaryButton_Click" />
-                    </WrapPanel>
+                    <StackPanel Margin="0,6,0,0">
+                        <WrapPanel x:Name="ControlsPanel" />
+                        <Button x:Name="PrimaryButton" Style="{StaticResource PrimaryButton}" Click="PrimaryButton_Click"
+                                HorizontalAlignment="Left" />
+                    </StackPanel>
                 </Border>
             </Grid>
 

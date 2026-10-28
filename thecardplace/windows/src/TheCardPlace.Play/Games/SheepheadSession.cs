@@ -381,6 +381,13 @@ public sealed class SheepheadSession : GameSession<SheepheadState, SheepheadActi
             }
             return;
         }
+        // At the pick, the choice is a button, not a card: focus goes to Pick up the blind.
+        if (State.Phase == SheepheadPhase.Pick && IsMyTurn)
+        {
+            Announcer.Say(Status, AnnouncementCategory.Turn);
+            RequestFocusChoices();
+            return;
+        }
         base.TurnCameToMe();
     }
 }
