@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The Microsoft Store package's manifest. A template: build/package-store.ps1 fills in each
+  $TOKEN$ (identity from identity.json, the version from the app's csproj, the architecture per
+  build) and writes the result into the package layout as AppxManifest.xml.
+
+  A full-trust desktop app: the same TheCardPlace.exe as any other build, run with the user's
+  rights. runFullTrust is the only capability. The games run entirely on the PC and the app
+  makes no network requests, so it asks for no internet access.
+
+  DisplayName must be the name reserved for the product in Partner Center; "The Card Place" is
+  what this assumes. If Partner Center reserves it without spaces, change both DisplayNames.
+-->
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap rescap">
+
+  <Identity
+    Name="$NAME$"
+    Publisher="$PUBLISHER$"
+    Version="$VERSION$"
+    ProcessorArchitecture="$ARCHITECTURE$" />
+
+  <Properties>
+    <DisplayName>The Card Place</DisplayName>
+    <PublisherDisplayName>$PUBLISHERDISPLAYNAME$</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+    <Description>Hearts, Euchre, Spades, Cribbage and Sheephead, built for the keyboard and the screen reader.</Description>
+  </Properties>
+
+  <!-- 1809, the oldest Windows 10 that .NET 10 supports. -->
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
+
+  <Applications>
+    <Application Id="TheCardPlace" Executable="TheCardPlace.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+        DisplayName="The Card Place"
+        Description="Five card games, built for the keyboard and the screen reader."
+        BackgroundColor="transparent"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png" />
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+</Package>

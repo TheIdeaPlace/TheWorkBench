@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+    <UseWPF>true</UseWPF>
+    <AssemblyName>TheCardPlace</AssemblyName>
+    <RootNamespace>TheCardPlace.App</RootNamespace>
+    <ApplicationIcon>Assets\TheCardPlace.ico</ApplicationIcon>
+    <Product>The Card Place</Product>
+    <Description>Five card games, built for the keyboard and the screen reader</Description>
+    <!-- The one place the version is written; the Store packaging script reads it from here. -->
+    <Version>0.1.0</Version>
+    <!-- The package check calls kernel32 through a generated, blittable P/Invoke. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="TheCardPlace.UiTests" />
+  </ItemGroup>
+  <ItemGroup>
+    <Resource Include="Assets\TheCardPlace.ico" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\TheCardPlace.Play\TheCardPlace.Play.csproj" />
+  </ItemGroup>
+</Project>

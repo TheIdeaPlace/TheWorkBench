@@ -27,6 +27,17 @@ and where it sits, every message goes through one announcement queue, and every 
 a heading. It lives in [`thecardplace/ios/`](./thecardplace/ios/), and its README says how it is
 built and how it meets WCAG.
 
+#### The Card Place for Windows
+
+The same five games as a native Windows app, played against the computer and entirely offline,
+built for JAWS and NVDA first and packaged for the Microsoft Store. The engines are C# ports of
+the iOS ones, with the same sentences and the same test suites, and every game can be played
+through to the end in tests by the same keys a person presses. Menus stay off the Tab ring, the
+hand is one Tab stop that the arrows move through, a card that cannot be played says why, and every
+announcement has a category the player can turn off. It lives in
+[`thecardplace/windows/`](./thecardplace/windows/), and its README says how it is built, tested
+and packaged.
+
 ### Euchre
 Euchre for four, in two fixed partnerships, first to ten points. Play against three computer
 opponents or open a table and play with other people; any empty seat is played by the computer, so
