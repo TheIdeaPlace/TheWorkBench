@@ -30,9 +30,11 @@ public enum AnnouncementCategory
 public static class AnnouncementCategories
 {
     /// <summary>The ones the player can switch, in the order the settings show them.</summary>
+    /// Background status is a core category, but nothing in this app runs in the background yet
+    /// (updates come from the Store), so it is not offered until something uses it.
     public static readonly AnnouncementCategory[] Configurable =
     [
-        AnnouncementCategory.Result, AnnouncementCategory.Status, AnnouncementCategory.Hint,
+        AnnouncementCategory.Result, AnnouncementCategory.Hint,
         AnnouncementCategory.Moves, AnnouncementCategory.Scoring, AnnouncementCategory.Table, AnnouncementCategory.Turn,
     ];
 
@@ -74,8 +76,8 @@ public static class AnnouncementCategories
         EventKind.Play or EventKind.Bid or EventKind.Pick =>
             e.Seat == me ? AnnouncementCategory.Result : AnnouncementCategory.Moves,
         EventKind.Trick or EventKind.Hand or EventKind.Score or EventKind.Moon or EventKind.Count => AnnouncementCategory.Scoring,
-        // The end of a game is never something to miss.
-        EventKind.Game => AnnouncementCategory.Turn,
+        // Who won is a score; it is not the player's turn.
+        EventKind.Game => AnnouncementCategory.Scoring,
         _ => AnnouncementCategory.Table,
     };
 }
@@ -117,12 +119,16 @@ public sealed class Announcer
     public bool WouldSpeak(AnnouncementCategory category) =>
         category != AnnouncementCategory.Silent && _settings.Enabled && _settings.IsOn(category);
 
-    public void Say(string text, AnnouncementCategory category = AnnouncementCategory.Result, bool force = false)
+    /// <param name="followsFocus">
+    /// The same action moved focus (a page changed, a dialog closed), so the message queues behind
+    /// the name of what focus landed on rather than cutting it off.
+    /// </param>
+    public void Say(string text, AnnouncementCategory category = AnnouncementCategory.Result, bool force = false, bool followsFocus = false)
     {
         var t = text.Trim();
         if (t.Length == 0) return;
         var spoken = force || WouldSpeak(category);
-        var interrupt = force || category.Interrupts();
+        var interrupt = !followsFocus && (force || category.Interrupts());
         LastText = t;
         if (spoken)
         {
@@ -141,7 +147,9 @@ public sealed class Announcer
     /// <summary>
     /// Several messages as one, so a run of computer turns is one notification that cannot cut
     /// itself off. Only the parts whose category is switched on are spoken; the whole run is
-    /// still the last message. The batch is delivered with the most urgent survivor's category.
+    /// still the last message. A batch always queues: it is what the game did, and it often
+    /// arrives as focus moves (a card played and the next card focused, the turn coming round),
+    /// where interrupting would cut off the name of the card the player has just reached.
     /// </summary>
     public void SayBatch(IEnumerable<(string Text, AnnouncementCategory Category)> parts)
     {
@@ -156,12 +164,11 @@ public sealed class Announcer
             return;
         }
         var text = string.Join(" ", heard.Select(p => p.Text.Trim()));
-        // A batch is a stream: it queues unless every part is a result.
-        var category = heard.All(p => p.Category == AnnouncementCategory.Result) ? AnnouncementCategory.Result : heard[^1].Category;
+        var category = heard[^1].Category;
         LastText = whole;
-        try { Speaker?.Speak(text, category.Interrupts(), "TheCardPlace." + category); }
+        try { Speaker?.Speak(text, false, "TheCardPlace." + category); }
         catch { /* never fatal */ }
-        Announced?.Invoke(new Announcement(text, category, false, category.Interrupts(), true));
+        Announced?.Invoke(new Announcement(text, category, false, false, true));
     }
 
     /// <summary>Says the last message again, forced.</summary>

@@ -34,11 +34,33 @@ public partial class GameView : UserControl
         PreviewKeyDown += View_PreviewKeyDown;
         PreviewTextInput += View_PreviewTextInput;
         session.Changed += QueueRefresh;
-        session.FocusCardRequested += id => Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () => FocusCard(id));
-        session.FocusChoicesRequested += () => Dispatcher.BeginInvoke(DispatcherPriority.Loaded, FocusChoices);
+        session.FocusCardRequested += id => Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () =>
+        {
+            if (MayMoveFocus) FocusCard(id);
+        });
+        session.FocusChoicesRequested += () => Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () =>
+        {
+            if (MayMoveFocus) FocusChoices();
+        });
     }
 
     public GameSession Session { get; }
+
+    /// <summary>
+    /// A turn moves focus to the cards or the choices, but not out of a menu the player has open
+    /// or a dialog in front: that would close the menu under them. The turn is still announced.
+    /// </summary>
+    private bool MayMoveFocus => _window.IsActive && !_window.MenuHasFocus;
+
+    /// <summary>Access keys already used on this page: the menus and the section labels.</summary>
+    private static readonly HashSet<char> PageKeys = ['g', 'r', 'v', 'h', 'u', 'b', 'y', 'o', 's', 'p', 'l'];
+
+    /// <summary>A choice's label, with an access key on a letter no other label or menu has.</summary>
+    private static string ChoiceLabel(string title)
+    {
+        var letter = title.ToLowerInvariant().FirstOrDefault(c => char.IsLetter(c) && !PageKeys.Contains(c));
+        return MainWindow.AccessOn(title, letter);
+    }
 
     /// <summary>Deals, draws the table, and puts focus in the hand.</summary>
     public void Begin()
@@ -268,7 +290,7 @@ public partial class GameView : UserControl
                 break;
             case StackPanel { Children: [Label label, ComboBox combo] } panel:
                 panel.Tag = "updating";
-                label.Content = "_" + c.Title.Replace("_", "__");
+                label.Content = ChoiceLabel(c.Title);
                 AutomationProperties.SetName(combo, c.Title);
                 if (!combo.ItemsSource?.Cast<string>().SequenceEqual(c.Options) ?? true) combo.ItemsSource = c.Options.ToList();
                 combo.SelectedIndex = c.SelectedIndex;

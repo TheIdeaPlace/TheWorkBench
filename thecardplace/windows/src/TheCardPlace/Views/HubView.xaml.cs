@@ -106,12 +106,14 @@ public partial class HubView : UserControl
 
     private void GamesList_SelectionChanged(object sender, SelectionChangedEventArgs e) => ShowDetails();
 
+    /// <summary>Enter plays the game that has focus, which is the one the screen reader just named.</summary>
     private void GamesList_KeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key == Key.Enter)
         {
             e.Handled = true;
-            PlaySelected();
+            if (Keyboard.FocusedElement is ListBoxItem { DataContext: GameItem g }) _window.Play(g.Kind);
+            else PlaySelected();
         }
     }
 
@@ -120,10 +122,15 @@ public partial class HubView : UserControl
         if (GamesList.SelectedItem is not null) PlaySelected();
     }
 
-    /// <summary>A Label's access key focuses the list itself; put focus on the selected game instead.</summary>
+    /// <summary>
+    /// A Label's access key focuses the list itself; put focus on the selected game instead. And
+    /// however focus reaches a game (arrows, a screen reader moving it, a click), that game is
+    /// the selected one, so the details beside it are always the focused game's.
+    /// </summary>
     private void GamesList_GotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
     {
         if (ReferenceEquals(e.NewFocus, GamesList)) Dispatcher.BeginInvoke(FocusGames);
+        else if (e.NewFocus is ListBoxItem { DataContext: GameItem g } && !ReferenceEquals(GamesList.SelectedItem, g)) GamesList.SelectedItem = g;
     }
 
     private void NameBox_TextChanged(object sender, TextChangedEventArgs e)

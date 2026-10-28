@@ -95,7 +95,7 @@ public partial class MainWindow : Window
         var game = MenuTop("_Game");
         if (_game is { } g)
         {
-            Add(game, "_New game", "Ctrl+N", () => g.NewGame());
+            Add(game, "_New game", "Ctrl+N", NewGame);
             Add(game, "_Leave this table", "Ctrl+W", LeaveTable);
             game.Items.Add(new Separator());
         }
@@ -111,11 +111,17 @@ public partial class MainWindow : Window
         if (_game is { } gv)
         {
             var review = MenuTop("_Review");
+            // Each item's access key is its own review letter, so the menu and the table agree and
+            // no two items share one. An item with no letter takes the first letter still free.
+            var used = new HashSet<char>(gv.Session.Reviews.Where(r => r.Key is not null).Select(r => r.Key!.Value)) { 'n', 'r' };
             foreach (var r in gv.Session.Reviews)
-                Add(review, Escape(r.Title), r.Key is { } k ? char.ToUpperInvariant(k).ToString() : "", () => _announcer.Request(r.Text()));
+            {
+                var letter = r.Key ?? r.Title.ToLowerInvariant().FirstOrDefault(c => char.IsLetter(c) && used.Add(c));
+                Add(review, AccessOn(r.Title, letter), r.Key is { } k ? char.ToUpperInvariant(k).ToString() : "", () => _announcer.Request(r.Text()));
+            }
             review.Items.Add(new Separator());
-            Add(review, "_Continue or deal", "N", () => gv.Session.Advance());
-            Add(review, "R_epeat the last message", "R", () => _announcer.RepeatLast());
+            Add(review, "Co_ntinue or deal", "N", () => gv.Session.Advance());
+            Add(review, "_Repeat the last message", "R", () => _announcer.RepeatLast());
         }
 
         var view = MenuTop("_View");
@@ -153,8 +159,16 @@ public partial class MainWindow : Window
         parent.Items.Add(item);
     }
 
-    /// <summary>A review title as a menu header: its first letter is the access key, and any underscore is literal.</summary>
-    private static string Escape(string title) => "_" + title.Replace("_", "__");
+    /// <summary>A title with its access key on the given letter, if it has one; any underscore in it is literal.</summary>
+    internal static string AccessOn(string title, char letter)
+    {
+        var t = title.Replace("_", "__");
+        var i = letter == default ? -1 : t.IndexOf(letter.ToString(), StringComparison.OrdinalIgnoreCase);
+        return i < 0 ? t : t.Insert(i, "_");
+    }
+
+    /// <summary>True while the menu bar or one of its menus has the keyboard.</summary>
+    internal bool MenuHasFocus => MainMenu.IsKeyboardFocusWithin;
 
     // ---- commands ----
 
@@ -163,7 +177,13 @@ public partial class MainWindow : Window
         if (_game is null) return;
         if (!ConfirmLeave("Leave this table?")) return;
         ShowHub();
-        _announcer.Say("Back at the games.", AnnouncementCategory.Result);
+        _announcer.Say("Back at the games.", AnnouncementCategory.Result, followsFocus: true);
+    }
+
+    private void NewGame()
+    {
+        if (_game is null || !ConfirmLeave("Start a new game?")) return;
+        _game.NewGame();
     }
 
     private bool ConfirmLeave(string question)
@@ -181,7 +201,7 @@ public partial class MainWindow : Window
             SettingsStore.Save(App.Settings);
             _hub?.Refresh();
             _game?.Refresh();
-            _announcer.Say("Settings saved.", AnnouncementCategory.Result);
+            _announcer.Say("Settings saved.", AnnouncementCategory.Result, followsFocus: true);
         }
     }
 
@@ -238,7 +258,7 @@ public partial class MainWindow : Window
         var key = e.Key == Key.System ? e.SystemKey : e.Key;
         Action? run = (mods, key) switch
         {
-            (ModifierKeys.Control, Key.N) when _game is not null => () => _game.NewGame(),
+            (ModifierKeys.Control, Key.N) when _game is not null => NewGame,
             (ModifierKeys.Control, Key.W) when _game is not null => LeaveTable,
             (ModifierKeys.Control, Key.OemComma) => OpenSettings,
             (ModifierKeys.Control, Key.F9) => ReadStatusBar,

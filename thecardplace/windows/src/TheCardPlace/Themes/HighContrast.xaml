@@ -16,6 +16,7 @@
     <SolidColorBrush x:Key="Brush.Accent" Color="{x:Static SystemColors.HighlightColor}" />
     <SolidColorBrush x:Key="Brush.AccentText" Color="{x:Static SystemColors.HighlightTextColor}" />
     <SolidColorBrush x:Key="Brush.Dimmed" Color="{x:Static SystemColors.ControlColor}" />
+    <SolidColorBrush x:Key="Brush.DimmedText" Color="{x:Static SystemColors.ControlTextColor}" />
     <SolidColorBrush x:Key="Brush.Focus" Color="{x:Static SystemColors.HighlightColor}" />
     <SolidColorBrush x:Key="Brush.FocusEdge" Color="{x:Static SystemColors.WindowTextColor}" />
     <SolidColorBrush x:Key="Brush.CardFace" Color="{x:Static SystemColors.WindowColor}" />

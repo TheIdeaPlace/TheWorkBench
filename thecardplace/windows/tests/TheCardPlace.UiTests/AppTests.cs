@@ -180,10 +180,15 @@ public sealed partial class AppTests : IDisposable
         catch (COMException) { return "an element that went away"; }
     }
 
+    private static readonly string[] Games =
+        ["Hearts, four players", "Euchre, four players", "Spades, four players", "Cribbage, two players", "Sheephead, three to six players"];
+
+    /// <summary>Picks a game the way a person does: Home, Down to it, Enter.</summary>
     private void StartGame(string listName, string windowTitle)
     {
-        var item = _window.FindFirstDescendant(cf => cf.ByName(listName)) ?? throw new Xunit.Sdk.XunitException($"no {listName} in the games list");
-        item.Focus();
+        Send(VirtualKeyShort.HOME);
+        WaitForFocus(e => e.Name == Games[0], "the first game");
+        for (var i = 0; i < Array.IndexOf(Games, listName); i++) Send(VirtualKeyShort.DOWN);
         WaitForFocus(e => e.Name == listName, listName);
         Send(VirtualKeyShort.ENTER);
         var timer = Stopwatch.StartNew();
@@ -272,7 +277,12 @@ public sealed partial class AppTests : IDisposable
             Send(VirtualKeyShort.RIGHT);
         }
         WaitToHear(t => t.Contains("Three of three chosen", StringComparison.Ordinal), "the third card chosen");
+        // N never passes; the Pass button is the next Tab stop after the hand.
         Type('n');
+        Assert.NotNull(_window.FindFirstDescendant(cf => cf.ByName("Pass 3 of 3")));
+        Send(VirtualKeyShort.TAB);
+        WaitForFocus(e => e.Name == "Pass 3 of 3", "the Pass button");
+        Send(VirtualKeyShort.ENTER);
         WaitToHear(t => t.Contains("Your turn", StringComparison.Ordinal) || t.Contains("passed you", StringComparison.Ordinal), "the pass and the play");
         WaitForFocus(e => e.Parent.Name == "Your hand", "the hand after passing");
     }
@@ -283,25 +293,31 @@ public sealed partial class AppTests : IDisposable
         StartGame("Hearts, four players", "Hearts");
         WaitForFocus(e => e.Parent.Name == "Your hand", "a card");
         for (var i = 0; i < 3; i++) { Send(VirtualKeyShort.SPACE); Send(VirtualKeyShort.RIGHT); }
-        Type('n');
-        // Play until a card is marked; at Immediate pace each of our plays brings the turn back.
-        for (var guard = 0; guard < 13; guard++)
+        Send(VirtualKeyShort.TAB);
+        WaitForFocus(e => e.Name == "Pass 3 of 3", "the Pass button");
+        Send(VirtualKeyShort.ENTER);
+        // Play until a card is marked, looking along the hand with the arrows as a person would.
+        // At Immediate pace each of our plays brings the turn straight back.
+        for (var trick = 0; trick < 13; trick++)
         {
-            var hand = _window.FindFirstDescendant(cf => cf.ByName("Your hand"));
-            var bad = hand?.FindAllChildren().FirstOrDefault(c => c.Name.Contains("cannot be played", StringComparison.Ordinal));
-            if (bad is not null)
+            WaitForFocus(e => e.Parent?.Name == "Your hand", "the hand");
+            Send(VirtualKeyShort.HOME);
+            for (var i = 0; i < 13; i++)
             {
-                bad.Focus();
-                WaitForFocus(e => e.Name == bad.Name, "the marked card");
-                _heard.Clear();
-                Send(VirtualKeyShort.ENTER);
-                WaitToHear(t => t.Contains("cannot be played: ", StringComparison.Ordinal), "the refusal");
-                Assert.NotNull(_window.FindFirstDescendant(cf => cf.ByName(bad.Name)));
-                return;
+                var f = Focused();
+                if (f.Name.Contains("cannot be played", StringComparison.Ordinal))
+                {
+                    var name = f.Name;
+                    _heard.Clear();
+                    Send(VirtualKeyShort.ENTER);
+                    WaitToHear(t => t.Contains("cannot be played: ", StringComparison.Ordinal), "the refusal");
+                    Assert.Equal(name, Focused().Name);
+                    return;
+                }
+                Send(VirtualKeyShort.RIGHT);
             }
-            var good = hand?.FindAllChildren().FirstOrDefault();
-            if (good is null) break;
-            good.Focus();
+            // Nothing marked: every card is playable, so play the first.
+            Send(VirtualKeyShort.HOME);
             Send(VirtualKeyShort.ENTER);
             Thread.Sleep(400);
         }

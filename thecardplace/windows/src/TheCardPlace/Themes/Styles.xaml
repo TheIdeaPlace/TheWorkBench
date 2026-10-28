@@ -71,6 +71,7 @@
                         </Trigger>
                         <Trigger Property="Tag" Value="dimmed">
                             <Setter Property="Background" Value="{DynamicResource Brush.Dimmed}" />
+                            <Setter Property="Foreground" Value="{DynamicResource Brush.DimmedText}" />
                             <Setter Property="FontWeight" Value="SemiBold" />
                         </Trigger>
                     </ControlTemplate.Triggers>

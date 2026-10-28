@@ -22,6 +22,7 @@
     <SolidColorBrush x:Key="Brush.Accent" Color="#FFC83D" />
     <SolidColorBrush x:Key="Brush.AccentText" Color="#1A1A1A" />
     <SolidColorBrush x:Key="Brush.Dimmed" Color="#A9B4AE" />
+    <SolidColorBrush x:Key="Brush.DimmedText" Color="#1A1A1A" />
     <SolidColorBrush x:Key="Brush.Focus" Color="#FFC83D" />
     <SolidColorBrush x:Key="Brush.FocusEdge" Color="#1A1A1A" />
     <SolidColorBrush x:Key="Brush.CardFace" Color="#FFFFFF" />

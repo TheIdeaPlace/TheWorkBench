@@ -34,15 +34,21 @@ public sealed class UiaSpeaker : ISpeaker
     {
         _window.Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, () =>
         {
-            if (!_window.IsActive)
+            // The app is in front if any of its windows is: a dialog over the table counts, so
+            // "Copied" in About is heard in About, not after it closes.
+            if (ActiveWindow() is not { } active)
             {
                 _held.Add((text, interrupt, activityId));
                 return;
             }
-            Raise(text, interrupt, activityId);
+            Raise(active, text, interrupt, activityId);
         });
     }
 
+    private static Window? ActiveWindow() =>
+        Application.Current?.Windows.OfType<Window>().FirstOrDefault(w => w.IsActive);
+
+    /// <summary>What was held while the app was in the background, queued behind whatever is read on return.</summary>
     private void Flush()
     {
         if (_held.Count == 0) return;
@@ -50,15 +56,16 @@ public sealed class UiaSpeaker : ISpeaker
         _held.Clear();
         _window.Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, () =>
         {
-            foreach (var (t, i, id) in held) Raise(t, i, id);
+            var target = ActiveWindow() ?? _window;
+            foreach (var (t, _, id) in held) Raise(target, t, false, id);
         });
     }
 
-    private void Raise(string text, bool interrupt, string activityId)
+    private static void Raise(Window window, string text, bool interrupt, string activityId)
     {
         try
         {
-            var peer = UIElementAutomationPeer.FromElement(_window) ?? UIElementAutomationPeer.CreatePeerForElement(_window);
+            var peer = UIElementAutomationPeer.FromElement(window) ?? UIElementAutomationPeer.CreatePeerForElement(window);
             peer?.RaiseNotificationEvent(
                 AutomationNotificationKind.Other,
                 interrupt ? AutomationNotificationProcessing.ImportantMostRecent : AutomationNotificationProcessing.All,

@@ -25,11 +25,11 @@ public sealed class HeartsSession : GameSession<HeartsState, HeartsAction>
     }
 
     protected override HeartsAction StartAction => new HeartsAction.Start();
-    protected override HeartsAction NewGameAction => new HeartsAction.NewGame();
     protected override void OnNewGame() => _selected.Clear();
 
     private HeartsPlayer MePlayer => State.Players[Me];
     private string Name(int seat) => State.Players[seat].Name;
+    protected override string SeatName(int seat) => Name(seat);
 
     public override string Status => HeartsReview.Status(State, Me);
     public override int HandCapacity => HeartsGame.HandSize;
@@ -159,6 +159,7 @@ public sealed class HeartsSession : GameSession<HeartsState, HeartsAction>
                 {
                     _selected.Add(item.Card);
                     Announcer.Say($"{item.Card.Name} chosen. {SelectionSummary}");
+                    if (_selected.Count == HeartsGame.PassCount) Announcer.Say("Choose Pass to send them.", AnnouncementCategory.Hint);
                 }
                 RaiseChanged();
                 break;
@@ -187,7 +188,7 @@ public sealed class HeartsSession : GameSession<HeartsState, HeartsAction>
         {
             var n = _selected.Count;
             if (n == 0) return "No cards chosen yet.";
-            return Prose.AsSentence($"{Prose.Number(n)} of three chosen") + (n == HeartsGame.PassCount ? " Choose Pass to send them." : "");
+            return Prose.AsSentence($"{Prose.Number(n)} of three chosen");
         }
     }
 

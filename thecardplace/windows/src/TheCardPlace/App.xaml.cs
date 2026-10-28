@@ -24,6 +24,13 @@ public partial class App : Application
         {
             if (a.PropertyName == nameof(SystemParameters.HighContrast)) ApplyTheme();
         };
+        // Moving from one high contrast theme to another leaves HighContrast true; the colours
+        // still change, and the theme reads them when it is loaded, so load it again.
+        Microsoft.Win32.SystemEvents.UserPreferenceChanged += (_, a) =>
+        {
+            if (a.Category is Microsoft.Win32.UserPreferenceCategory.Color or Microsoft.Win32.UserPreferenceCategory.Accessibility)
+                Dispatcher.BeginInvoke(ApplyTheme);
+        };
 
         base.OnStartup(e);
         var window = new MainWindow();

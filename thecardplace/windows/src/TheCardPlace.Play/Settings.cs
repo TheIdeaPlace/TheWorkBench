@@ -94,12 +94,25 @@ public sealed class AppSettings
         if (string.IsNullOrWhiteSpace(json)) return new AppSettings();
         try
         {
-            return JsonSerializer.Deserialize<AppSettings>(json, JsonOptions) ?? new AppSettings();
+            return (JsonSerializer.Deserialize<AppSettings>(json, JsonOptions) ?? new AppSettings()).Normalized();
         }
         catch (JsonException)
         {
             return new AppSettings();
         }
+    }
+
+    /// <summary>A file edited by hand, or from an older version, may hold nulls or a zoom of zero; mend them.</summary>
+    private AppSettings Normalized()
+    {
+        PlayerName ??= "Player";
+        Announcements ??= new AnnouncementSettings();
+        Announcements.Categories ??= [];
+        Games ??= [];
+        foreach (var key in Games.Where(kv => kv.Value is null).Select(kv => kv.Key).ToList()) Games.Remove(key);
+        foreach (var g in Games.Values) g.Rules ??= [];
+        Zoom = double.IsFinite(Zoom) ? Math.Clamp(Zoom, 0.8, 2.0) : 1.0;
+        return this;
     }
 }
 

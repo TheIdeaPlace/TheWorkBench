@@ -13,7 +13,7 @@
                        Foreground="{DynamicResource Brush.OnFelt}" />
             <TextBlock DockPanel.Dock="Top" Text="Five card games against the computer, built for the keyboard and the screen reader."
                        FontSize="15" TextWrapping="Wrap" Margin="0,2,0,14" Foreground="{DynamicResource Brush.OnFeltSoft}" />
-            <Label DockPanel.Dock="Top" Content="_Games" Target="{Binding ElementName=GamesList}" Style="{StaticResource FeltLabel}" />
+            <Label DockPanel.Dock="Top" Content="_Choose a game" Target="{Binding ElementName=GamesList}" Style="{StaticResource FeltLabel}" />
             <ListBox x:Name="GamesList" Style="{StaticResource QuietList}" Background="{DynamicResource Brush.Rail}"
                      BorderThickness="0" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                      AutomationProperties.Name="Games"

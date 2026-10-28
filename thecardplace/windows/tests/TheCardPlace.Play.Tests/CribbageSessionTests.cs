@@ -161,7 +161,8 @@ public class CribbageSessionTests
 
         s.Activate(Table.CardIn(s, cards[0].Card));
         s.Activate(Table.CardIn(s, cards[1].Card));
-        Assert.EndsWith("Two of two chosen. Choose Throw to send them to the crib.", heard[^1].Text, StringComparison.Ordinal);
+        Assert.EndsWith("Two of two chosen.", heard[^2].Text, StringComparison.Ordinal);
+        Assert.Equal(("Choose Throw to send them to the crib.", AnnouncementCategory.Hint), (heard[^1].Text, heard[^1].Category));
         var before = Snapshot.Json(s.State);
         s.Activate(Table.CardIn(s, cards[2].Card));
         Assert.True(heard[^1].Forced);

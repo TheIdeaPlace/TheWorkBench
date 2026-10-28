@@ -80,7 +80,11 @@ public abstract class GameSession : IDisposable
     /// <summary>True while a game is under way and leaving would lose it.</summary>
     public abstract bool InProgress { get; }
 
-    /// <summary>The control the N key presses: Continue during a pause, otherwise the primary when it is ready.</summary>
+    /// <summary>
+    /// The N key, as in the browser games: Continue during a pause, or the primary when it is one
+    /// that moves the game on (cut, deal, next, go) and says so with its N key. A bid, a pass or
+    /// a bury is never made by N; for anything else N reads the status.
+    /// </summary>
     public void Advance()
     {
         if (Gate.IsWaiting)
@@ -89,7 +93,7 @@ public abstract class GameSession : IDisposable
             return;
         }
         var p = Primary;
-        if (p.Enabled && p.Id != "idle") p.Action();
+        if (p.Enabled && p.Key == 'n') p.Action();
         else Announcer.Request(Status);
     }
 
@@ -168,7 +172,9 @@ public abstract class GameSession<TState, TAction> : GameSession
     protected abstract TState CreateState();
 
     protected abstract TAction StartAction { get; }
-    protected abstract TAction NewGameAction { get; }
+
+    /// <summary>A seat's name, for messages the table itself writes.</summary>
+    protected virtual string SeatName(int seat) => $"seat {seat + 1}";
 
     public bool IsMyTurn => Engine.SeatToAct(State) == Me;
 
@@ -204,6 +210,7 @@ public abstract class GameSession<TState, TAction> : GameSession
     private void CancelRun()
     {
         _run?.Cancel();
+        _run?.Dispose();
         _run = null;
         Gate.Cancel();
     }
@@ -279,6 +286,7 @@ public abstract class GameSession<TState, TAction> : GameSession
     protected void RunBots()
     {
         _run?.Cancel();
+        _run?.Dispose();
         var run = new CancellationTokenSource();
         _run = run;
         BotsTask = DriveBots(run.Token);
@@ -298,14 +306,14 @@ public abstract class GameSession<TState, TAction> : GameSession
                    && Controllers[seat] == SeatController.Computer)
             {
                 var action = Engine.Decide(State, seat, _rng);
-                if (action is null) break;
+                if (action is null)
+                {
+                    Announcer.Error($"The computer could not find a move for {SeatName(seat)}. Start a new game with Ctrl+N.");
+                    break;
+                }
+                // Held plays wait for the end of the run: that is what gathering them means.
                 if (Engine.PausesBefore(State, action))
                 {
-                    if (held.Count > 0 && Pace != Pace.Immediate)
-                    {
-                        Speak(held);
-                        held = [];
-                    }
                     await Gate.WaitAsync(Pace, token);
                     if (token.IsCancellationRequested) return;
                 }

@@ -11,6 +11,7 @@ public sealed class PaceGate
 {
     private TaskCompletionSource? _pending;
     private CancellationTokenSource? _timer;
+    private CancellationTokenRegistration _registration;
 
     /// <summary>True while the game is paused for the pace or for Continue.</summary>
     public bool IsWaiting => _pending is not null;
@@ -35,7 +36,7 @@ public sealed class PaceGate
             if (home is null) FireIf(tcs);
             else home.Post(_ => FireIf(tcs), null);
         }
-        token.Register(FireAtHome);
+        _registration = token.Register(FireAtHome);
         if (pace.Delay() is { } delay)
         {
             _ = Task.Delay(delay, timer.Token).ContinueWith(t =>
@@ -64,7 +65,9 @@ public sealed class PaceGate
         if (p is null) return;
         _pending = null;
         _timer?.Cancel();
+        _timer?.Dispose();
         _timer = null;
+        _registration.Dispose();
         Changed?.Invoke();
         p.TrySetResult();
     }

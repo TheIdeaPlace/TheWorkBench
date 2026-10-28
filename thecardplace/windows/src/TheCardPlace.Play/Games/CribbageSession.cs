@@ -49,7 +49,6 @@ public sealed class CribbageSession : GameSession<CribbageState, CribbageAction>
     }
 
     protected override CribbageAction StartAction => new CribbageAction.Start();
-    protected override CribbageAction NewGameAction => new CribbageAction.NewGame();
 
     /// <summary>
     /// A new game keeps the games won. One that follows a finished game is the next game; one
@@ -64,6 +63,7 @@ public sealed class CribbageSession : GameSession<CribbageState, CribbageAction>
     private CribbagePlayer MePlayer => State.Players[Me];
     private CribbagePlayer Opponent => State.Players[CribbageGame.Other(Me)];
     private string Name(int seat) => State.Players[seat].Name;
+    protected override string SeatName(int seat) => Name(seat);
     private static string Num(int n) => n.ToString(CultureInfo.InvariantCulture);
     private static string Cap(string s) => CribbageGame.Cap(s);
 
@@ -295,6 +295,7 @@ public sealed class CribbageSession : GameSession<CribbageState, CribbageAction>
                 {
                     _selected.Add(item.Card);
                     Announcer.Say($"{item.Card.Name} chosen. {SelectionSummary}");
+                    if (_selected.Count == 2) Announcer.Say("Choose Throw to send them to the crib.", AnnouncementCategory.Hint);
                 }
                 RaiseChanged();
                 break;
@@ -323,7 +324,7 @@ public sealed class CribbageSession : GameSession<CribbageState, CribbageAction>
         {
             var n = _selected.Count;
             if (n == 0) return "No cards chosen yet.";
-            return $"{Cap(Prose.Number(n))} of two chosen" + (n == 2 ? ". Choose Throw to send them to the crib." : ".");
+            return $"{Cap(Prose.Number(n))} of two chosen.";
         }
     }
 

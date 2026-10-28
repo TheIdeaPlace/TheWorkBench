@@ -37,7 +37,7 @@ public static class KeyboardHelp
 {
     public const string Text =
         """
-        Tab and Shift+Tab move between the parts of the table: the status line, the table, your hand, the controls, the scores, the hands played and the game log. Each list is one stop; the arrow keys move within it.
+        Tab and Shift+Tab move between the parts of the table: the status line, the table, your hand, the controls, then at the right what is on the table, the scores, the hands played and the game log. Each list is one stop; the arrow keys move within it. Escape closes this window.
 
         In your hand
         Left and Right arrow: the previous or next card. Home and End: the first or last card.
@@ -45,7 +45,7 @@ public static class KeyboardHelp
         Enter or Space: play the card, or choose it for a pass, a discard or a bury. A card you cannot play says why.
 
         Anywhere at the table
-        N: continue, or do what the first button says (deal the next hand, pass the cards).
+        N: continue, cut, or deal the next hand. A bid, a pass or a bury is never made by N; it is the button after the cards.
         R: repeat the last message.
         G: go to the game log, newest first.
         H, T, L, S and the other review letters: hear your hand, the trick, the last trick, the scores and more. The Review menu lists the ones each game has.
@@ -53,7 +53,7 @@ public static class KeyboardHelp
 
         Everywhere
         Alt or F10: the menus.
-        Alt+U status line, Alt+B table, Alt+Y your hand, Alt+S scores, Alt+P hands played, Alt+L game log.
+        Alt+U status line, Alt+B table, Alt+Y your hand, Alt+O on the table, Alt+S scores, Alt+P hands played, Alt+L game log.
         Ctrl+N: new game. Ctrl+W: leave the table.
         Ctrl+Comma: settings.
         Ctrl+F9: read the status bar again. Ctrl+Shift+F9: move to it; Escape comes back.

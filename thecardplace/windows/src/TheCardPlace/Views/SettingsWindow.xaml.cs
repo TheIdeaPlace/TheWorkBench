@@ -27,7 +27,10 @@ public partial class SettingsWindow : Window
         UpdateCategories();
     }
 
-    /// <summary>The categories stay reachable when speech is off, so they can be set first; they read as unavailable.</summary>
+    /// <summary>
+    /// The categories stay reachable and changeable when speech is off, so they can be set first;
+    /// they are drawn fainter, and the master switch above them says whether any is spoken.
+    /// </summary>
     private void UpdateCategories()
     {
         foreach (var b in _boxes.Values) b.Opacity = SpeakBox.IsChecked == true ? 1 : 0.6;

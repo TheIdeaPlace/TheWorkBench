@@ -226,7 +226,8 @@ public class SheepheadSessionTests
         Assert.StartsWith("Choose exactly two cards to bury.", heard[^1].Text, StringComparison.Ordinal);
 
         s.Activate(Table.CardIn(s, cards[1]));
-        Assert.EndsWith("Two of two chosen. Choose Bury to put them down.", heard[^1].Text, StringComparison.Ordinal);
+        Assert.EndsWith("Two of two chosen.", heard[^2].Text, StringComparison.Ordinal);
+        Assert.Equal(("Choose Bury to put them down.", AnnouncementCategory.Hint), (heard[^1].Text, heard[^1].Category));
         s.Activate(Table.CardIn(s, cards[2]));
         Assert.True(heard[^1].Forced);
         Assert.Equal($"Two cards are already chosen: {cards[0].Name} and {cards[1].Name}. Remove one first.", heard[^1].Text);

@@ -51,7 +51,6 @@ public sealed class EuchreSession : GameSession<EuchreState, EuchreAction>
     }
 
     protected override EuchreAction StartAction => new EuchreAction.Start();
-    protected override EuchreAction NewGameAction => new EuchreAction.NewGame();
 
     /// <summary>
     /// The record of games won carries on; the scores do not. After a finished game the next one
@@ -67,6 +66,7 @@ public sealed class EuchreSession : GameSession<EuchreState, EuchreAction>
 
     private EuchrePlayer MePlayer => State.Players[Me];
     private string Name(int seat) => State.Players[seat].Name;
+    protected override string SeatName(int seat) => Name(seat);
     private static string Num(int n) => n.ToString(CultureInfo.InvariantCulture);
 
     private bool IsDealer => State.Dealer == Me;
@@ -372,9 +372,9 @@ public sealed class EuchreSession : GameSession<EuchreState, EuchreAction>
     }
 
     /// <summary>
-    /// Says what the table wants from the player. While bidding focus stays where it is, since the
-    /// bids are controls and the hand is there to read; to put a card back or to play, focus goes
-    /// to the hand. Between hands, what was face down is read out once and kept in the log.
+    /// Says what the table wants from the player. While bidding, focus goes to the bids, which are
+    /// controls (the hand is still there to read); to put a card back or to play, focus goes to
+    /// the hand. Between hands, what was face down is read out once and kept in the log.
     /// </summary>
     protected override void TurnCameToMe()
     {

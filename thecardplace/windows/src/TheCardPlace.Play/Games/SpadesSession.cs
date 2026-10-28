@@ -25,10 +25,10 @@ public sealed class SpadesSession : GameSession<SpadesState, SpadesAction>
     }
 
     protected override SpadesAction StartAction => new SpadesAction.Start();
-    protected override SpadesAction NewGameAction => new SpadesAction.NewGame();
 
     private SpadesPlayer MePlayer => State.Players[Me];
     private string Name(int seat) => State.Players[seat].Name;
+    protected override string SeatName(int seat) => Name(seat);
     private static string Num(int n) => n.ToString(CultureInfo.InvariantCulture);
 
     public override string Status => SpadesReview.Status(State, Me);

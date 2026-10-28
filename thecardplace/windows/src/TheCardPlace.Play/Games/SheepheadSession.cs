@@ -43,7 +43,6 @@ public sealed class SheepheadSession : GameSession<SheepheadState, SheepheadActi
     }
 
     protected override SheepheadAction StartAction => new SheepheadAction.Start();
-    protected override SheepheadAction NewGameAction => new SheepheadAction.NewGame();
 
     /// <summary>
     /// The table may have changed size in the settings. The new state is built after this, from
@@ -59,6 +58,7 @@ public sealed class SheepheadSession : GameSession<SheepheadState, SheepheadActi
 
     private SheepheadPlayer MePlayer => State.Players[Me];
     private string Name(int seat) => State.Players[seat].Name;
+    protected override string SeatName(int seat) => Name(seat);
     private bool IsPicker => State.Picker == Me;
     /// <summary>How many cards the picker takes and buries: two at every table size.</summary>
     private int BuryCount => State.Spec.Blind;
@@ -283,6 +283,7 @@ public sealed class SheepheadSession : GameSession<SheepheadState, SheepheadActi
                 {
                     _selected.Add(item.Card);
                     Announcer.Say($"{item.Card.Name} chosen. {SelectionSummary}");
+                    if (_selected.Count == BuryCount) Announcer.Say("Choose Bury to put them down.", AnnouncementCategory.Hint);
                 }
                 RaiseChanged();
                 break;
@@ -314,8 +315,7 @@ public sealed class SheepheadSession : GameSession<SheepheadState, SheepheadActi
         {
             var n = _selected.Count;
             if (n == 0) return "No cards chosen yet.";
-            return $"{Cap(Prose.Number(n))} of {Prose.Number(BuryCount)} chosen"
-                + (n == BuryCount ? ". Choose Bury to put them down." : ".");
+            return $"{Cap(Prose.Number(n))} of {Prose.Number(BuryCount)} chosen.";
         }
     }
 
