@@ -109,11 +109,20 @@ public sealed partial class AppTests : IDisposable
     private void BringToFront()
     {
         var timer = Stopwatch.StartNew();
+        var tries = 0;
         while (!AppIsInFront())
         {
             if (timer.Elapsed > Timeout) throw new InvalidOperationException("The app could not come to the front; not sending keys elsewhere");
+            // Windows only lets a process that has had input bring another window forward. A test
+            // runner started from a script has had none, so after the first try it taps Alt, which
+            // counts as input and changes nothing in any window, then asks again.
+            if (tries++ > 0)
+            {
+                Keyboard.Press(VirtualKeyShort.ALT);
+                Keyboard.Release(VirtualKeyShort.ALT);
+            }
             _window.SetForeground();
-            Thread.Sleep(100);
+            Thread.Sleep(150);
         }
     }
 
