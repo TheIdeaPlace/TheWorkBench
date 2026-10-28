@@ -1,0 +1,18 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/TheCardPlace.Core/TheCardPlace.Core.csproj" />
+    <Project Path="src/TheCardPlace.Cribbage/TheCardPlace.Cribbage.csproj" />
+    <Project Path="src/TheCardPlace.Euchre/TheCardPlace.Euchre.csproj" />
+    <Project Path="src/TheCardPlace.Hearts/TheCardPlace.Hearts.csproj" />
+    <Project Path="src/TheCardPlace.Sheephead/TheCardPlace.Sheephead.csproj" />
+    <Project Path="src/TheCardPlace.Spades/TheCardPlace.Spades.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/TheCardPlace.Core.Tests/TheCardPlace.Core.Tests.csproj" />
+    <Project Path="tests/TheCardPlace.Cribbage.Tests/TheCardPlace.Cribbage.Tests.csproj" />
+    <Project Path="tests/TheCardPlace.Euchre.Tests/TheCardPlace.Euchre.Tests.csproj" />
+    <Project Path="tests/TheCardPlace.Hearts.Tests/TheCardPlace.Hearts.Tests.csproj" />
+    <Project Path="tests/TheCardPlace.Sheephead.Tests/TheCardPlace.Sheephead.Tests.csproj" />
+    <Project Path="tests/TheCardPlace.Spades.Tests/TheCardPlace.Spades.Tests.csproj" />
+  </Folder>
+</Solution>

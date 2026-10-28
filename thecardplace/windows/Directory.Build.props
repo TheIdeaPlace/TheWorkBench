@@ -1,0 +1,13 @@
+<Project>
+  <!-- One set of compiler rules for every project here. Warnings fail the build:
+       a build with warnings is not a clean build. -->
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Company>The Idea Place</Company>
+    <Authors>Kelly Ford</Authors>
+    <Copyright>Copyright © 2026 Kelly Ford</Copyright>
+  </PropertyGroup>
+</Project>

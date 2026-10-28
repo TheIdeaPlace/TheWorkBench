@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The rules of Euchre and its computer players. Core only: see ENGINES.md. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\TheCardPlace.Core\TheCardPlace.Core.csproj" />
+  </ItemGroup>
+</Project>
