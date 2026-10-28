@@ -16,6 +16,7 @@ public partial class MainWindow : Window
     private const double MinZoom = 0.8, MaxZoom = 2.0, ZoomStep = 0.1;
 
     private readonly Announcer _announcer;
+    private readonly UiaSpeaker _speaker;
     private HubView? _hub;
     private GameView? _game;
     private IInputElement? _beforeStatus;
@@ -24,7 +25,8 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         FitToScreen();
-        _announcer = new Announcer(App.Settings.Announcements, new UiaSpeaker(this));
+        _speaker = new UiaSpeaker(this);
+        _announcer = new Announcer(App.Settings.Announcements, _speaker);
         _announcer.Announced += a => StatusText.Text = _announcer.LastText;
         PreviewKeyDown += Window_PreviewKeyDown;
         Closing += (_, e) =>
@@ -59,6 +61,7 @@ public partial class MainWindow : Window
     public void ShowHub()
     {
         _game?.Session.Dispose();
+        _speaker.Clear();
         _game = null;
         _hub ??= new HubView(this);
         _hub.Refresh();
@@ -116,7 +119,9 @@ public partial class MainWindow : Window
             var used = new HashSet<char>(gv.Session.Reviews.Where(r => r.Key is not null).Select(r => r.Key!.Value)) { 'n', 'r' };
             foreach (var r in gv.Session.Reviews)
             {
-                var letter = r.Key ?? r.Title.ToLowerInvariant().FirstOrDefault(c => char.IsLetter(c) && used.Add(c));
+                var letter = r.Key is { } own && r.Title.Contains(own, StringComparison.OrdinalIgnoreCase)
+                    ? own
+                    : r.Title.ToLowerInvariant().FirstOrDefault(c => char.IsLetter(c) && used.Add(c));
                 Add(review, AccessOn(r.Title, letter), r.Key is { } k ? char.ToUpperInvariant(k).ToString() : "", () => _announcer.Request(r.Text()));
             }
             review.Items.Add(new Separator());
@@ -183,6 +188,7 @@ public partial class MainWindow : Window
     private void NewGame()
     {
         if (_game is null || !ConfirmLeave("Start a new game?")) return;
+        _speaker.Clear();
         _game.NewGame();
     }
 

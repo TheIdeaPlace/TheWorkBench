@@ -324,8 +324,18 @@ public abstract class GameSession<TState, TAction> : GameSession
                     break;
                 }
                 var parts = Drain();
-                if (batching) held.AddRange(parts);
-                else Speak(parts);
+                if (!batching) Speak(parts);
+                else
+                {
+                    held.AddRange(parts);
+                    // Gathered plays are spoken a trick at a time at the timed paces, so a hand
+                    // the player sits out (a partner alone in euchre) is not silent until it ends.
+                    if (Pace != Pace.Immediate && parts.Any(p => p.Category == AnnouncementCategory.Scoring))
+                    {
+                        Speak(held);
+                        held = [];
+                    }
+                }
                 RaiseChanged();
             }
         }

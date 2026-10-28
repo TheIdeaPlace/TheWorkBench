@@ -35,6 +35,11 @@ public sealed class UiaSpeaker : ISpeaker
     public void Speak(string text, bool interrupt, string activityId)
     {
         _pending.Add((text, interrupt, activityId));
+        ScheduleFlush();
+    }
+
+    private void ScheduleFlush()
+    {
         if (_flushScheduled) return;
         _flushScheduled = true;
         _window.Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, () =>
@@ -74,17 +79,27 @@ public sealed class UiaSpeaker : ISpeaker
     private static Window? ActiveWindow() =>
         Application.Current?.Windows.OfType<Window>().FirstOrDefault(w => w.IsActive);
 
-    /// <summary>What was held while the app was in the background, queued behind whatever is read on return.</summary>
+    /// <summary>
+    /// What was held while the app was in the background, queued behind whatever is read on
+    /// return, and sent with anything else spoken in the same moment as one notification.
+    /// </summary>
     private void Flush()
     {
         if (_held.Count == 0) return;
-        var held = _held.ToList();
+        var held = _held.Select(h => (h.Text, false, h.Id)).ToList();
         _held.Clear();
-        _window.Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, () =>
-        {
-            var target = ActiveWindow() ?? _window;
-            foreach (var (t, _, id) in Coalesce(held.Select(h => (h.Text, false, h.Id)).ToList())) Raise(target, t, false, id);
-        });
+        _pending.InsertRange(0, held);
+        ScheduleFlush();
+    }
+
+    /// <summary>
+    /// Drops what is held or waiting: the table it was about has gone (a new game, back to the
+    /// games), and hearing its last plays after the new deal would only confuse.
+    /// </summary>
+    public void Clear()
+    {
+        _held.Clear();
+        _pending.Clear();
     }
 
     private static void Raise(Window window, string text, bool interrupt, string activityId)

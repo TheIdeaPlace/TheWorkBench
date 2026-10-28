@@ -62,10 +62,10 @@ public class TableDriverTests
     public async Task A_timed_pause_is_ended_by_continue_and_moves_on_one_play()
     {
         using var ui = new SingleThread();
-        var (s, _, _, _) = ui.Run(() => Table.Make<HeartsSession>(GameKind.Hearts, 21, Pace.Relaxed));
+        // Seed 22: a computer player leads after the pass, so there is a pause before its play.
+        var (s, _, _, _) = ui.Run(() => Table.Make<HeartsSession>(GameKind.Hearts, 22, Pace.Relaxed));
         ui.Run(() => { s.Start(); PassFor(s); });
-        await ui.Until(() => s.Gate.IsWaiting || s.IsMyTurn, "a pause or the player's turn");
-        if (ui.Run(() => s.IsMyTurn)) return; // the player leads; nothing to wait for
+        await ui.Until(() => s.Gate.IsWaiting, "a pause before the computer's lead");
         var played = ui.Run(() => s.State.Trick.Count);
         ui.Run(() => s.Advance());
         await ui.Until(() => s.State.Trick.Count > played || s.IsMyTurn, "the next play after Continue");

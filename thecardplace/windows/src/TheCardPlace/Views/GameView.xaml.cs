@@ -252,7 +252,7 @@ public partial class GameView : UserControl
     {
         FrameworkElement el = c.Kind switch
         {
-            ControlKind.Toggle => new CheckBox { VerticalAlignment = VerticalAlignment.Center, Foreground = (System.Windows.Media.Brush)FindResource("Brush.OnFelt") },
+            ControlKind.Toggle => new CheckBox { VerticalAlignment = VerticalAlignment.Center },
             ControlKind.Choice => new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 10, 8) },
             _ => new Button { Style = (Style)FindResource("SecondaryButton") },
         };
@@ -262,6 +262,8 @@ public partial class GameView : UserControl
                 b.Click += (_, _) => (b.DataContext as GameControl)?.Action();
                 break;
             case CheckBox box:
+                // A resource reference, not a copy, so a change of theme recolours it.
+                box.SetResourceReference(ForegroundProperty, "Brush.OnFelt");
                 box.Click += (_, _) => (box.DataContext as GameControl)?.OnToggle?.Invoke(box.IsChecked == true);
                 break;
             case StackPanel panel:
