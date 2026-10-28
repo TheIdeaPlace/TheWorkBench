@@ -50,8 +50,7 @@ public sealed partial class AppTests : IDisposable
         _app = Application.Launch(start);
         try
         {
-            _window = _app.GetMainWindow(_automation, TimeSpan.FromSeconds(20))
-                      ?? throw new InvalidOperationException("The Card Place did not open a window");
+            _window = WaitForMainWindow();
             _window.RegisterNotificationEvent(TreeScope.Subtree, (_, _, _, text, _) => _heard.Enqueue(text));
             BringToFront();
             WaitForFocus(e => e.Name == "Hearts, four players", "the games list");
@@ -61,6 +60,27 @@ public sealed partial class AppTests : IDisposable
             CloseApp();
             throw;
         }
+    }
+
+    /// <summary>
+    /// The window, found by its process and title. FlaUI's own lookup gives up early on a slow
+    /// first start (a cold VM, an emulated runtime), so this polls, and says so if the app died.
+    /// </summary>
+    private Window WaitForMainWindow()
+    {
+        var timer = Stopwatch.StartNew();
+        while (timer.Elapsed < TimeSpan.FromSeconds(45))
+        {
+            if (_app.HasExited) throw new InvalidOperationException($"The Card Place exited at start with code {_app.ExitCode}");
+            try
+            {
+                var w = _app.GetMainWindow(_automation, TimeSpan.FromSeconds(2));
+                if (w is not null && w.Title.Contains("The Card Place", StringComparison.Ordinal)) return w;
+            }
+            catch (COMException) { }
+            Thread.Sleep(250);
+        }
+        throw new InvalidOperationException("The Card Place did not open a window in 45 seconds");
     }
 
     public void Dispose()
