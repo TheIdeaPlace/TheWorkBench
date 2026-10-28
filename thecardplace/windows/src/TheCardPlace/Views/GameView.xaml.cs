@@ -108,6 +108,10 @@ public partial class GameView : UserControl
         HistoryLabel.Content = Session.History.Title.Length > 0 ? AccessText(Session.History.Title, 'p') : "Hands _played";
         RefreshLog();
         RefreshLines();
+        // A list with no items has no item to take focus, so Tab would skip it. Until it has
+        // some, the list itself is the stop, so it can still be found and heard to be empty.
+        foreach (var list in new ItemsControl[] { HandList, TableList, LinesList, ScoresList, HistoryList, LogList })
+            list.IsTabStop = list.Items.Count == 0;
     }
 
     private void RefreshLines()
