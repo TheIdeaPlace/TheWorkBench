@@ -394,7 +394,9 @@ public sealed partial class AppTests : IDisposable
         Assert.False(string.IsNullOrWhiteSpace(status.Text));
         var ring = TabRing();
         Assert.DoesNotContain(ring, e => e.ControlType == ControlType.MenuItem);
-        Assert.Equal(1, ring.Count(e => e.ControlType == ControlType.ListItem && e.Parent?.Name == "Your hand"));
+        // The hand is one stop: a card, or before the deal (cribbage starts with the cut) the empty list.
+        Assert.Equal(1, ring.Count(e => (e.ControlType == ControlType.ListItem && e.Parent?.Name == "Your hand")
+                                        || (e.ControlType == ControlType.List && e.Name == "Your hand")));
         Assert.All(ring, e => Assert.False(string.IsNullOrEmpty(e.Name), $"a {e.ControlType} with no name"));
     }
 }
