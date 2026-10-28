@@ -4,8 +4,10 @@
     <Project Path="src/TheCardPlace.Cribbage/TheCardPlace.Cribbage.csproj" />
     <Project Path="src/TheCardPlace.Euchre/TheCardPlace.Euchre.csproj" />
     <Project Path="src/TheCardPlace.Hearts/TheCardPlace.Hearts.csproj" />
+    <Project Path="src/TheCardPlace.Play/TheCardPlace.Play.csproj" />
     <Project Path="src/TheCardPlace.Sheephead/TheCardPlace.Sheephead.csproj" />
     <Project Path="src/TheCardPlace.Spades/TheCardPlace.Spades.csproj" />
+    <Project Path="src/TheCardPlace/TheCardPlace.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/TheCardPlace.Core.Tests/TheCardPlace.Core.Tests.csproj" />

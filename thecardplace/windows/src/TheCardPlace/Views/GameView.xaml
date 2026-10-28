@@ -1,0 +1,130 @@
+<UserControl x:Class="TheCardPlace.App.Views.GameView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:v="clr-namespace:TheCardPlace.App.Views">
+    <!-- Top to bottom, the order Tab goes: the status line, the table, your hand, the controls,
+         then the scores, the hands played and the log at the right. Each list is one Tab stop
+         with arrows inside it. -->
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Border Grid.Row="0" Background="{DynamicResource Brush.Rail}" Padding="14,8">
+            <DockPanel>
+                <Label DockPanel.Dock="Left" Content="Stat_us" Target="{Binding ElementName=StatusLine}" Style="{StaticResource FeltLabel}"
+                       VerticalAlignment="Center" Margin="0,0,8,0" />
+                <TextBox x:Name="StatusLine" IsReadOnly="True" IsReadOnlyCaretVisible="True" FontSize="17" FontWeight="SemiBold"
+                         BorderThickness="0" Background="Transparent" Foreground="{DynamicResource Brush.OnFelt}"
+                         CaretBrush="{DynamicResource Brush.OnFelt}" TextWrapping="Wrap" AutomationProperties.Name="Status"
+                         FocusVisualStyle="{StaticResource FocusRing}" />
+            </DockPanel>
+        </Border>
+
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="360" />
+            </Grid.ColumnDefinitions>
+
+            <Grid Grid.Column="0" Background="{DynamicResource Brush.FeltTable}">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*" MinHeight="250" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <!-- The table: a chair for each player, arranged around it, each showing what they
+                     have played to this trick. Read as a list in play order from your chair. -->
+                <Grid Grid.Row="0" Margin="12,8,12,4">
+                    <Label Content="Ta_ble" Target="{Binding ElementName=TableList}" Style="{StaticResource FeltLabel}"
+                           HorizontalAlignment="Left" VerticalAlignment="Top" />
+                    <TextBlock x:Name="TableNote" HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center"
+                               TextWrapping="Wrap" MaxWidth="260" FontSize="15" FontWeight="SemiBold" IsHitTestVisible="False"
+                               Foreground="{DynamicResource Brush.OnFelt}" />
+                    <ListBox x:Name="TableList" Style="{StaticResource QuietList}" Background="Transparent" BorderThickness="0"
+                             ItemContainerStyle="{StaticResource SeatItem}" AutomationProperties.Name="Table"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                             PreviewKeyDown="TableList_PreviewKeyDown" GotKeyboardFocus="List_GotKeyboardFocus">
+                        <ListBox.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <v:TablePanel />
+                            </ItemsPanelTemplate>
+                        </ListBox.ItemsPanel>
+                    </ListBox>
+                </Grid>
+
+                <!-- Your hand: one Tab stop. Left and Right move card to card, Home and End to the
+                     ends, 1 to 9 jump to a card, Enter or Space plays or chooses it. -->
+                <Border Grid.Row="1" Background="{DynamicResource Brush.Rail}" Padding="12,6,12,8">
+                    <StackPanel>
+                        <Label Content="_Your hand" Target="{Binding ElementName=HandList}" Style="{StaticResource FeltLabel}" />
+                        <ListBox x:Name="HandList" Style="{StaticResource QuietList}" Background="Transparent" BorderThickness="0"
+                                 ItemContainerStyle="{StaticResource HandItem}" AutomationProperties.Name="Your hand"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                                 PreviewKeyDown="HandList_PreviewKeyDown" GotKeyboardFocus="List_GotKeyboardFocus"
+                                 PreviewMouseLeftButtonUp="HandList_PreviewMouseLeftButtonUp">
+                            <ListBox.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <WrapPanel Orientation="Horizontal" />
+                                </ItemsPanelTemplate>
+                            </ListBox.ItemsPanel>
+                        </ListBox>
+                    </StackPanel>
+                </Border>
+
+                <!-- The controls: the action that moves the game on comes first, always in the
+                     same place; the phase's other choices follow. -->
+                <Border Grid.Row="2" Background="{DynamicResource Brush.Rail}" Padding="12,2,12,6" BorderThickness="0,1,0,0"
+                        BorderBrush="{DynamicResource Brush.Felt}">
+                    <WrapPanel x:Name="ControlsPanel" Margin="0,6,0,0" KeyboardNavigation.TabNavigation="Local">
+                        <Button x:Name="PrimaryButton" Style="{StaticResource PrimaryButton}" Click="PrimaryButton_Click" />
+                    </WrapPanel>
+                </Border>
+            </Grid>
+
+            <!-- The numbers and the story so far. -->
+            <DockPanel Grid.Column="1" Margin="12,6,12,10">
+                <Label DockPanel.Dock="Top" x:Name="ScoresLabel" Content="_Scores" Target="{Binding ElementName=ScoresList}" Style="{StaticResource PanelLabel}" />
+                <ListView x:Name="ScoresList" DockPanel.Dock="Top" MaxHeight="210" FontSize="14" IsTextSearchEnabled="False"
+                          KeyboardNavigation.TabNavigation="Once" AutomationProperties.Name="Scores" GotKeyboardFocus="List_GotKeyboardFocus">
+                    <ListView.ItemContainerStyle>
+                        <Style TargetType="ListViewItem">
+                            <Setter Property="AutomationProperties.Name" Value="{Binding AccessibleName}" />
+                            <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing}" />
+                        </Style>
+                    </ListView.ItemContainerStyle>
+                    <ListView.View>
+                        <GridView x:Name="ScoresGrid" AllowsColumnReorder="False" />
+                    </ListView.View>
+                </ListView>
+
+                <Label DockPanel.Dock="Top" x:Name="HistoryLabel" Content="Hands _played" Target="{Binding ElementName=HistoryList}" Style="{StaticResource PanelLabel}" />
+                <ListView x:Name="HistoryList" DockPanel.Dock="Top" MaxHeight="170" FontSize="14" IsTextSearchEnabled="False"
+                          KeyboardNavigation.TabNavigation="Once" AutomationProperties.Name="Hands played" GotKeyboardFocus="List_GotKeyboardFocus">
+                    <ListView.ItemContainerStyle>
+                        <Style TargetType="ListViewItem">
+                            <Setter Property="AutomationProperties.Name" Value="{Binding AccessibleName}" />
+                            <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing}" />
+                        </Style>
+                    </ListView.ItemContainerStyle>
+                    <ListView.View>
+                        <GridView x:Name="HistoryGrid" AllowsColumnReorder="False" />
+                    </ListView.View>
+                </ListView>
+
+                <Label DockPanel.Dock="Top" Content="Game _log, newest first" Target="{Binding ElementName=LogList}" Style="{StaticResource PanelLabel}" />
+                <ListBox x:Name="LogList" Style="{StaticResource QuietList}" ItemContainerStyle="{StaticResource TextItem}"
+                         AutomationProperties.Name="Game log" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         GotKeyboardFocus="List_GotKeyboardFocus">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding}" TextWrapping="Wrap" />
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </DockPanel>
+        </Grid>
+    </Grid>
+</UserControl>

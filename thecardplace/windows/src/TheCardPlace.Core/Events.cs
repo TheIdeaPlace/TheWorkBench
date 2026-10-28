@@ -121,7 +121,7 @@ public static class Prose
 
     /// <summary>"1 point", "2 points".</summary>
     public static string Count(int n, string singular, string? plural = null) =>
-        $"{n} " + (n == 1 ? singular : plural ?? singular + "s");
+        n.ToString(System.Globalization.CultureInfo.InvariantCulture) + " " + (n == 1 ? singular : plural ?? singular + "s");
 
     private static readonly string[] Words =
     [
@@ -144,7 +144,7 @@ public static class Prose
             11 or 12 or 13 => "th",
             _ => (n % 10) switch { 1 => "st", 2 => "nd", 3 => "rd", _ => "th" },
         };
-        return $"{n}{suffix}";
+        return n.ToString(System.Globalization.CultureInfo.InvariantCulture) + suffix;
     }
 
     /// <summary>Capitalises the first letter and ends with a full stop if there is no closing punctuation.</summary>
