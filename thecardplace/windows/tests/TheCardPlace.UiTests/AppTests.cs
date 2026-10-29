@@ -356,7 +356,9 @@ public sealed partial class AppTests : IDisposable
         var landed = new ConcurrentQueue<string>();
         var handler = _automation.RegisterFocusChangedEvent(e =>
         {
-            try { landed.Enqueue($"{e.ControlType}|{e.Name}"); } catch (COMException) { }
+            // Only the app's own focus: the VM's taskbar or a Windows notification is not ours.
+            try { if (e.Properties.ProcessId.ValueOrDefault == _app.ProcessId) landed.Enqueue($"{e.ControlType}|{e.Name}"); }
+            catch (COMException) { }
         });
         try
         {
