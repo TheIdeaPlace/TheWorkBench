@@ -8,8 +8,16 @@ public partial class App : Application
 {
     public static AppSettings Settings { get; private set; } = new();
 
+    /// <summary>
+    /// <c>--seed N</c> on the command line deals every game from a fixed seed, so a recorded demo
+    /// or a test can know every card in advance. Not offered anywhere in the app.
+    /// </summary>
+    public static ulong? Seed { get; private set; }
+
     protected override void OnStartup(StartupEventArgs e)
     {
+        var seedAt = Array.IndexOf(e.Args, "--seed");
+        if (seedAt >= 0 && seedAt + 1 < e.Args.Length && ulong.TryParse(e.Args[seedAt + 1], out var seed)) Seed = seed;
         DispatcherUnhandledException += OnDispatcherException;
         AppDomain.CurrentDomain.UnhandledException += (_, a) => Diagnostics.Log("unhandled: " + a.ExceptionObject);
         TaskScheduler.UnobservedTaskException += (_, a) =>

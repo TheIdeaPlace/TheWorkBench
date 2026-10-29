@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using TheCardPlace.App.Views;
+using TheCardPlace.Core;
 using TheCardPlace.Play;
 
 namespace TheCardPlace.App;
@@ -76,7 +77,7 @@ public partial class MainWindow : Window
     {
         App.Settings.LastGame = kind.Key();
         SettingsStore.Save(App.Settings);
-        var session = GameFactory.Create(kind, App.Settings, _announcer);
+        var session = GameFactory.Create(kind, App.Settings, _announcer, App.Seed is { } seed ? new RandomSource(seed) : null);
         _game = new GameView(this, session);
         Page.Content = _game;
         Title = $"{kind.Title()} - The Card Place";
