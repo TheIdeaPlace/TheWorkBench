@@ -265,6 +265,9 @@ public sealed partial class AppTests : IDisposable
     {
         StartGame("Hearts, four players", "Hearts");
         var first = WaitForFocus(e => e.ControlType == ControlType.ListItem && e.Parent.Name == "Your hand", "a card");
+        // The selection follows focus, so it isn't offered: Narrator said "selected" on every card.
+        Assert.False(first.Patterns.SelectionItem.IsSupported);
+        Assert.False(first.Parent.Patterns.Selection.IsSupported);
         Send(VirtualKeyShort.RIGHT);
         var second = WaitForFocus(e => e.Name != first.Name && e.Parent.Name == "Your hand", "the next card");
         Send(VirtualKeyShort.LEFT);
@@ -330,7 +333,7 @@ public sealed partial class AppTests : IDisposable
                     var name = f.Name;
                     _heard.Clear();
                     Send(VirtualKeyShort.ENTER);
-                    WaitToHear(t => t.Contains("cannot be played: ", StringComparison.Ordinal), "the refusal");
+                    WaitToHear(t => t.Contains("cannot be played, ", StringComparison.Ordinal), "the refusal");
                     Assert.Equal(name, Focused().Name);
                     return;
                 }
@@ -344,6 +347,54 @@ public sealed partial class AppTests : IDisposable
         throw new Xunit.Sdk.XunitException("no unplayable card came up in a whole hand");
     }
 
+    /// <summary>
+    /// Playing the focused card takes it out of the hand. Focus must go to another card first:
+    /// if it fell to the window even for a moment, JAWS would read the whole window.
+    /// </summary>
+    [Fact]
+    public void Focus_never_falls_to_the_window_while_cards_are_played()
+    {
+        StartGame("Hearts, four players", "Hearts");
+        WaitForFocus(e => e.Parent.Name == "Your hand", "a card");
+        var landed = new ConcurrentQueue<string>();
+        var handler = _automation.RegisterFocusChangedEvent(e =>
+        {
+            // Only the app's own focus: the VM's taskbar or a Windows notification is not ours.
+            try { if (e.Properties.ProcessId.ValueOrDefault == _app.ProcessId) landed.Enqueue($"{e.ControlType}|{e.Name}"); }
+            catch (COMException) { }
+        });
+        try
+        {
+            for (var i = 0; i < 3; i++) { Send(VirtualKeyShort.SPACE); Send(VirtualKeyShort.RIGHT); }
+            Send(VirtualKeyShort.TAB);
+            WaitForFocus(e => e.Name == "Pass 3 of 3", "the Pass button");
+            _heard.Clear();
+            Send(VirtualKeyShort.ENTER);
+            for (var trick = 0; trick < 6; trick++)
+            {
+                // Wait for the turn to come back, so every Enter really plays a card.
+                WaitToHear(t => t.Contains("Your turn", StringComparison.Ordinal), "the turn");
+                _heard.Clear();
+                WaitForFocus(e => e.Parent?.Name == "Your hand", "the hand");
+                Send(VirtualKeyShort.HOME);
+                for (var i = 0; i < 13 && Focused().Name.Contains("cannot be played", StringComparison.Ordinal); i++)
+                    Send(VirtualKeyShort.RIGHT);
+                Assert.DoesNotContain("cannot be played", Focused().Name, StringComparison.Ordinal);
+                Send(VirtualKeyShort.ENTER);
+            }
+            Thread.Sleep(500);
+        }
+        finally
+        {
+            handler.Dispose();
+        }
+        // Only ever a card or a control: never the window, the page or a pane round the lists.
+        var allowed = new[] { ControlType.ListItem, ControlType.Button, ControlType.ComboBox, ControlType.CheckBox };
+        var stray = landed.Where(l => !allowed.Any(t => l.StartsWith($"{t}|", StringComparison.Ordinal))).ToList();
+        Assert.True(stray.Count == 0, "Focus landed on " + string.Join(" ; ", stray) + "\nAll: " + string.Join(" ; ", landed));
+        Assert.Contains(landed, l => l.StartsWith($"{ControlType.ListItem}|", StringComparison.Ordinal));
+    }
+
     [Fact]
     public void Review_keys_and_the_status_bar_keys_speak_without_moving_focus()
     {
@@ -351,7 +402,7 @@ public sealed partial class AppTests : IDisposable
         var card = WaitForFocus(e => e.Parent.Name == "Your hand", "a card");
         _heard.Clear();
         Type('h');
-        WaitToHear(t => t.Contains("clubs", StringComparison.OrdinalIgnoreCase) || t.Contains("club:", StringComparison.OrdinalIgnoreCase), "the hand read out");
+        WaitToHear(t => t.Contains("clubs, ", StringComparison.OrdinalIgnoreCase) || t.Contains("club, ", StringComparison.OrdinalIgnoreCase), "the hand read out");
         Assert.Equal(card.Name, Focused().Name);
         _heard.Clear();
         Send(VirtualKeyShort.CONTROL, VirtualKeyShort.F9);

@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Windows;
 using System.Windows.Automation;
+using System.Windows.Automation.Peers;
 using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Input;
@@ -15,6 +16,13 @@ namespace TheCardPlace.App.Views;
 /// </summary>
 public partial class GameView : UserControl
 {
+    /// <summary>
+    /// No automation element for the page itself: its controls sit straight under the window.
+    /// The page has no name, so JAWS made one from all the text in it ("Status ... Table Your
+    /// hand On the table Scores ... Game log") and read it out whenever the cards changed.
+    /// </summary>
+    protected override AutomationPeer? OnCreateAutomationPeer() => null;
+
     private readonly MainWindow _window;
     private readonly ObservableCollection<HandItem> _hand = [];
     private readonly ObservableCollection<SeatItem> _seats = [];
@@ -22,6 +30,11 @@ public partial class GameView : UserControl
     private readonly Dictionary<string, FrameworkElement> _secondary = [];
     private string _scoreShape = "", _historyShape = "";
     private bool _refreshQueued;
+    private Action? _pendingFocus;
+    private string? _pendingCard;
+    private readonly ObservableCollection<RowItem> _scores = [];
+    private readonly ObservableCollection<RowItem> _history = [];
+    private readonly ObservableCollection<RowItem> _lines = [];
 
     public GameView(MainWindow window, GameSession session)
     {
@@ -34,14 +47,21 @@ public partial class GameView : UserControl
         PreviewKeyDown += View_PreviewKeyDown;
         PreviewTextInput += View_PreviewTextInput;
         session.Changed += QueueRefresh;
-        session.FocusCardRequested += id => Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () =>
+        // A turn's focus move waits for the redraw that goes with it, and runs inside it, after
+        // the hand and before the controls: the main button is renamed ("Play a card") only once
+        // focus has left it, so the rename isn't read out on the way to the cards.
+        session.FocusCardRequested += id =>
         {
-            if (MayMoveFocus) FocusCard(id);
-        });
-        session.FocusChoicesRequested += () => Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () =>
+            _pendingFocus = () => FocusCard(id);
+            _pendingCard = id;
+            QueueRefresh();
+        };
+        session.FocusChoicesRequested += () =>
         {
-            if (MayMoveFocus) FocusChoices();
-        });
+            _pendingFocus = FocusChoices;
+            _pendingCard = null;
+            QueueRefresh();
+        };
     }
 
     public GameSession Session { get; }
@@ -52,29 +72,32 @@ public partial class GameView : UserControl
     /// </summary>
     private bool MayMoveFocus => _window.IsActive && !_window.MenuHasFocus;
 
-    /// <summary>Access keys already used on this page: the menus and the section labels.</summary>
-    private static readonly HashSet<char> PageKeys = ['g', 'r', 'v', 'h', 'u', 'b', 'y', 'o', 's', 'p', 'l'];
 
-    /// <summary>A choice's label, with an access key on a letter no other label or menu has.</summary>
-    private static string ChoiceLabel(string title)
-    {
-        var letter = title.ToLowerInvariant().FirstOrDefault(c => char.IsLetter(c) && !PageKeys.Contains(c));
-        return MainWindow.AccessOn(title, letter);
-    }
+    /// <summary>
+    /// A choice's label, without an access key: the choices are reached with Tab from the hand
+    /// and get focus when it's the player's turn, and a key letter was read out ("cap eye").
+    /// </summary>
+    private static string ChoiceLabel(string title) => title.Replace("_", "__");
 
-    /// <summary>Deals, draws the table, and puts focus in the hand.</summary>
+    /// <summary>
+    /// Deals, draws the table, and puts focus in it straight away: on the card or choice the
+    /// turn asked for, else the hand. Called once the view is on screen and laid out.
+    /// </summary>
     public void Begin()
     {
         Session.Start();
         Refresh();
-        Fallback(FocusHand);
+        if (!IsKeyboardFocusWithin) FocusHand();
     }
 
     public void NewGame()
     {
         Session.NewGame();
+        // If the player acts first, the new game's turn has already asked for focus (the bid,
+        // Pick up the blind) and Refresh moves it there; only otherwise does it go to the hand.
+        var turnAsked = _pendingFocus is not null;
         Refresh();
-        FocusHand();
+        if (!turnAsked) FocusHand();
     }
 
     // ---- drawing ----
@@ -96,15 +119,29 @@ public partial class GameView : UserControl
 
     public void Refresh()
     {
-        StatusLine.Text = Session.Status;
-        TableNote.Text = Session.TableNote;
+        StatusLine.Text = SpokenText.Plain(Session.Status);
+        TableNote.Text = SpokenText.Plain(Session.TableNote);
         TableNote.Visibility = Session.TableNote.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+        // A turn that asks for the choices (the bid, Pick up the blind) takes focus to them
+        // before the hand changes, so a new hand never puts focus on a card on the way.
+        var focus = _pendingFocus;
+        _pendingFocus = null;
+        if (!MayMoveFocus) focus = null;
+        if (focus == FocusChoices)
+        {
+            _pendingCard = null;
+            RefreshControls();
+            FocusChoices();
+            focus = null;
+        }
         RefreshHand();
         RefreshSeats();
+        _pendingCard = null;
+        focus?.Invoke();
         RefreshControls();
-        RefreshTable(ScoresList, ScoresGrid, Session.Scores, ref _scoreShape);
+        RefreshTable(ScoresList, ScoresGrid, Session.Scores, ref _scoreShape, _scores);
         ScoresLabel.Content = "_" + Session.Scores.Title.Replace("_", "__");
-        RefreshTable(HistoryList, HistoryGrid, Session.History, ref _historyShape);
+        RefreshTable(HistoryList, HistoryGrid, Session.History, ref _historyShape, _history);
         HistoryLabel.Content = Session.History.Title.Length > 0 ? AccessText(Session.History.Title, 'p') : "Hands _played";
         RefreshLog();
         RefreshLines();
@@ -116,15 +153,9 @@ public partial class GameView : UserControl
 
     private void RefreshLines()
     {
-        var lines = new[] { Session.TableNote }.Concat(Session.TableLines).Where(l => l.Length > 0).ToList();
-        if (LinesList.ItemsSource is List<string> old && old.SequenceEqual(lines)) return;
-        var focused = LinesList.IsKeyboardFocusWithin ? Math.Max(0, LinesList.SelectedIndex) : -1;
-        LinesList.ItemsSource = lines;
-        if (focused >= 0 && lines.Count > 0)
-        {
-            LinesList.SelectedIndex = Math.Min(focused, lines.Count - 1);
-            Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () => FocusList(LinesList));
-        }
+        var lines = new[] { Session.TableNote }.Concat(Session.TableLines).Where(l => l.Length > 0).Select(SpokenText.Plain).ToList();
+        if (!ReferenceEquals(LinesList.ItemsSource, _lines)) LinesList.ItemsSource = _lines;
+        Sync(_lines, lines.Count, (item, i) => item.Update([lines[i]], lines[i]), LinesList);
     }
 
     /// <summary>Puts the access key on the given letter if the title has it, else leaves it bare.</summary>
@@ -138,52 +169,56 @@ public partial class GameView : UserControl
     private void RefreshHand()
     {
         var cards = Session.Hand;
-        var focusedIndex = -1;
-        string? focusedId = null;
-        if (HandList.IsKeyboardFocusWithin && Keyboard.FocusedElement is ListBoxItem { DataContext: HandItem f })
+        var keep = new HashSet<string>(cards.Select(c => c.Id));
+
+        // If the card that has focus is about to go (played, thrown, buried), move focus first:
+        // to the card the turn has asked for, else the next card that stays, else the one before.
+        // Removing it first would drop focus onto the window for a moment, and JAWS reads the
+        // whole window.
+        if (HandList.IsKeyboardFocusWithin
+            && Keyboard.FocusedElement is ListBoxItem { DataContext: HandItem f }
+            && _hand.IndexOf(f) is var gone and >= 0
+            && !keep.Contains(f.Id))
         {
-            focusedId = f.Id;
-            focusedIndex = _hand.IndexOf(f);
+            var next = (_pendingCard is { } asked && keep.Contains(asked) ? _hand.FirstOrDefault(h => h.Id == asked) : null)
+                       ?? _hand.Skip(gone + 1).FirstOrDefault(h => keep.Contains(h.Id))
+                       ?? _hand.Take(gone).LastOrDefault(h => keep.Contains(h.Id));
+            if (next is not null)
+            {
+                FocusCard(next.Id);
+            }
+            else if (cards.Count > 0)
+            {
+                // A whole new hand (a new game mid-hand): add the new cards, focus one, and only
+                // then take the old ones away.
+                var old = _hand.Count;
+                foreach (var c in cards)
+                {
+                    var item = new HandItem(c.Id);
+                    item.Update(c);
+                    _hand.Add(item);
+                }
+                FocusCard(_pendingCard is { } id && keep.Contains(id) ? id : cards[0].Id);
+                for (var i = old - 1; i >= 0; i--) _hand.RemoveAt(i);
+                return;
+            }
+            else
+            {
+                // The button is renamed for what comes next ("Next", "Deal the next hand") before
+                // focus lands on it, so only its new name is read.
+                SetButton(PrimaryButton, Session.Gate.IsWaiting ? Session.ContinueControl : Session.Primary);
+                FocusPrimary();
+            }
         }
 
         // Remove what has gone, insert what is new, keep the rest in place and update it.
         for (var i = _hand.Count - 1; i >= 0; i--)
-            if (!cards.Any(c => c.Id == _hand[i].Id)) _hand.RemoveAt(i);
-        for (var i = 0; i < cards.Count; i++)
-        {
-            var at = IndexOf(_hand, cards[i].Id);
-            if (at < 0)
-            {
-                var item = new HandItem(cards[i].Id);
-                _hand.Insert(i, item);
-                at = i;
-            }
-            else if (at != i)
-            {
-                _hand.Move(at, i);
-            }
-            _hand[i].Update(cards[i]);
-        }
-
-        // The card that had focus was played: focus its neighbour, so focus never falls out of
-        // the hand to the window.
-        if (focusedId is not null && IndexOf(_hand, focusedId) < 0 && _hand.Count > 0)
-        {
-            var next = Math.Min(focusedIndex, _hand.Count - 1);
-            var id = _hand[next].Id;
-            Fallback(() => FocusCard(id));
-        }
-        else if (focusedId is not null && _hand.Count == 0)
-        {
-            Fallback(FocusPrimary);
-        }
-    }
-
-    private static int IndexOf(ObservableCollection<HandItem> items, string id)
-    {
-        for (var i = 0; i < items.Count; i++)
-            if (items[i].Id == id) return i;
-        return -1;
+            if (!keep.Contains(_hand[i].Id)) _hand.RemoveAt(i);
+        // In order without moving the focused card (a Euchre hand re-sorted once trump is named).
+        var focused = HandList.IsKeyboardFocusWithin && Keyboard.FocusedElement is ListBoxItem { DataContext: HandItem fi } ? fi.Id : null;
+        ListOrder.InOrder(cards.Select(c => c.Id).ToList(), () => _hand.Count, i => _hand[i].Id,
+            _hand.Move, (i, id) => _hand.Insert(i, new HandItem(id)), focused);
+        for (var i = 0; i < cards.Count; i++) _hand[i].Update(cards[i]);
     }
 
     private void RefreshSeats()
@@ -211,31 +246,28 @@ public partial class GameView : UserControl
         foreach (var id in _secondary.Keys.Where(k => !keep.Contains(k)).ToList())
         {
             var gone = _secondary[id];
-            var hadFocus = gone.IsKeyboardFocusWithin;
+            // Focus moves before the control goes, never after, so it never falls to the window.
+            if (gone.IsKeyboardFocusWithin) FocusPrimary();
             ControlsPanel.Children.Remove(gone);
             _secondary.Remove(id);
-            if (hadFocus) Fallback(FocusPrimary);
         }
-        for (var i = 0; i < wanted.Count; i++)
+        foreach (var c in wanted)
         {
-            var c = wanted[i];
-            var key = KeyOf(c);
-            if (!_secondary.TryGetValue(key, out var el))
-            {
-                el = Create(c);
-                _secondary[key] = el;
-            }
-            else
-            {
-                Update(el, c);
-            }
-            var at = ControlsPanel.Children.IndexOf(el);
-            if (at != i)
-            {
-                if (at >= 0) ControlsPanel.Children.RemoveAt(at);
-                ControlsPanel.Children.Insert(Math.Min(i, ControlsPanel.Children.Count), el);
-            }
+            if (_secondary.TryGetValue(KeyOf(c), out var el)) Update(el, c);
+            else _secondary[KeyOf(c)] = Create(c);
         }
+        // As in the hand: in order without moving the focused control.
+        var children = ControlsPanel.Children;
+        var keyOf = _secondary.ToDictionary(p => (UIElement)p.Value, p => p.Key);
+        var focused = _secondary.FirstOrDefault(p => p.Value.IsKeyboardFocusWithin).Key;
+        ListOrder.InOrder(wanted.Select(KeyOf).ToList(), () => children.Count, i => keyOf[children[i]],
+            (from, to) =>
+            {
+                var el = children[from];
+                children.RemoveAt(from);
+                children.Insert(to, el);
+            },
+            (i, key) => children.Insert(i, _secondary[key]), focused);
     }
 
     private static string KeyOf(GameControl c) => c.Kind + ":" + c.Id;
@@ -305,7 +337,7 @@ public partial class GameView : UserControl
         }
     }
 
-    private static void RefreshTable(ListView list, GridView grid, ScoreTable table, ref string shape)
+    private static void RefreshTable(ListView list, GridView grid, ScoreTable table, ref string shape, ObservableCollection<RowItem> rows)
     {
         var newShape = string.Join("|", table.Columns);
         if (newShape != shape)
@@ -315,23 +347,28 @@ public partial class GameView : UserControl
                 grid.Columns.Add(new GridViewColumn { Header = table.Columns[i], DisplayMemberBinding = new Binding($"Cells[{i}]") });
             shape = newShape;
         }
-        var rows = table.Rows.Select((r, i) => new TableRow(r, table.RowName(i))).ToList();
-        if (list.ItemsSource is List<TableRow> old && old.SequenceEqual(rows, RowComparer.Instance)) return;
-        var focused = list.IsKeyboardFocusWithin ? list.SelectedIndex : -1;
-        list.ItemsSource = rows;
-        if (focused >= 0 && rows.Count > 0)
-        {
-            list.SelectedIndex = Math.Min(focused, rows.Count - 1);
-            list.Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () =>
-                (list.ItemContainerGenerator.ContainerFromIndex(list.SelectedIndex) as UIElement)?.Focus());
-        }
+        if (!ReferenceEquals(list.ItemsSource, rows)) list.ItemsSource = rows;
+        Sync(rows, table.Rows.Count, (item, i) => item.Update(table.Rows[i], table.RowName(i)), list);
     }
 
-    private sealed class RowComparer : IEqualityComparer<TableRow>
+    /// <summary>
+    /// Brings a list of rows to <paramref name="count"/> items, updating the ones that stay in
+    /// place. Rows are only ever added or removed at the end, and if the row that has focus is
+    /// about to go, focus moves to the new last row first.
+    /// </summary>
+    private static void Sync(ObservableCollection<RowItem> rows, int count, Action<RowItem, int> update, ItemsControl list)
     {
-        public static readonly RowComparer Instance = new();
-        public bool Equals(TableRow? a, TableRow? b) => a?.AccessibleName == b?.AccessibleName;
-        public int GetHashCode(TableRow r) => r.AccessibleName.GetHashCode(StringComparison.Ordinal);
+        if (rows.Count > count && list.IsKeyboardFocusWithin
+            && Keyboard.FocusedElement is FrameworkElement { DataContext: RowItem f } && rows.IndexOf(f) >= count)
+        {
+            // To the new last row, or to the list itself when none are left (it is then its own
+            // Tab stop, read as empty).
+            if (count > 0) (list.ItemContainerGenerator.ContainerFromIndex(count - 1) as UIElement)?.Focus();
+            else list.Focus();
+        }
+        while (rows.Count > count) rows.RemoveAt(rows.Count - 1);
+        while (rows.Count < count) rows.Add(new RowItem());
+        for (var i = 0; i < count; i++) update(rows[i], i);
     }
 
     private void RefreshLog()
@@ -339,6 +376,7 @@ public partial class GameView : UserControl
         var log = Session.Log;
         if (log.Count < _log.Count)
         {
+            if (LogList.IsKeyboardFocusWithin) LogList.Focus();
             _log.Clear();
         }
         var fresh = log.Count - _log.Count;
@@ -359,17 +397,6 @@ public partial class GameView : UserControl
     }
 
     public void FocusLog() => FocusList(LogList);
-
-    /// <summary>
-    /// Where focus goes when the control that had it has gone (a card played, a bid button
-    /// removed), but only if nothing else has taken it by then: a turn that has just come round
-    /// moves focus to the cards or the choices, and that must win over this.
-    /// </summary>
-    private void Fallback(Action focus) =>
-        Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, () =>
-        {
-            if (!IsKeyboardFocusWithin && IsVisible) focus();
-        });
 
     private void FocusPrimary() => PrimaryButton.Focus();
 

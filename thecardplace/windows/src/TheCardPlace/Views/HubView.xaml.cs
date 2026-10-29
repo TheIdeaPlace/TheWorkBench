@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Automation.Peers;
 using System.Windows.Controls;
 using System.Windows.Input;
 using TheCardPlace.Core;
@@ -9,6 +10,13 @@ namespace TheCardPlace.App.Views;
 /// <summary>The opening page: pick a game, set your name and the game's options, and deal.</summary>
 public partial class HubView : UserControl
 {
+    /// <summary>
+    /// No automation element for the page itself: its controls sit straight under the window.
+    /// The page has no name, so JAWS made one from all the text in it ("The Card Place Five card
+    /// games against the computer ... Choose a game") and read it out on the way to the games.
+    /// </summary>
+    protected override AutomationPeer? OnCreateAutomationPeer() => null;
+
     private readonly MainWindow _window;
     private bool _loading;
 

@@ -43,13 +43,14 @@ public static class HeartsReview
         return string.Join(" ", parts);
     }
 
-    /// "North played the Two of Clubs, East played the Ace of Clubs. Clubs was led."
+    /// "North played the Two of Clubs, East played the Ace of Clubs. Clubs were led."
+    /// Not yet in Swift or the browser, which say "Clubs was led": a suit is plural.
     public static string Trick(HeartsState state, int seat)
     {
         if (state.Trick.Count == 0) return "Nothing has been played to this trick yet.";
         var parts = state.Trick.Select(t => $"{Name(state, t.Seat)} played the {HeartsCards.Name(t.Card)}");
         var led = state.Trick[0].Card.Suit;
-        return string.Join(", ", parts) + $". {led.Name()} was led.";
+        return string.Join(", ", parts) + $". {led.Name()} were led.";
     }
 
     /// The last completed trick, which is the question a player asks most

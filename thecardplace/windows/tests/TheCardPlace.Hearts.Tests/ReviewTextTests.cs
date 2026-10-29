@@ -23,7 +23,7 @@ public class ReviewTextTests
         var empty = PlayState([["2C"], ["3C"], ["4C"], ["5C"]], turn: 0);
         Assert.Equal("Nothing has been played to this trick yet.", HeartsReview.Trick(empty, 0));
         var s = PlayState([["2C"], ["3C"], ["4C"], ["5C"]], turn: 2, trick: [(0, "TH"), (1, "AH")], tricksPlayed: 4, heartsBroken: true);
-        Assert.Equal("North played the Ten of Hearts, East played the Ace of Hearts. Hearts was led.", HeartsReview.Trick(s, 0));
+        Assert.Equal("North played the Ten of Hearts, East played the Ace of Hearts. Hearts were led.", HeartsReview.Trick(s, 0));
     }
 
     [Fact]

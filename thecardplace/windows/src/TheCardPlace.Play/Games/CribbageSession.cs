@@ -388,7 +388,8 @@ public sealed class CribbageSession : GameSession<CribbageState, CribbageAction>
         switch (State.Phase)
         {
             case CribbagePhase.Play when IsMyTurn:
-                var words = Status;
+                // The last play line has just said the count; the status would say it again.
+                var words = "Your turn.";
                 var legal = LegalPlays;
                 if (legal.Count == 0) words += " " + CribbageReview.Prompt(State, Me);
                 Announcer.Say(words, AnnouncementCategory.Turn);

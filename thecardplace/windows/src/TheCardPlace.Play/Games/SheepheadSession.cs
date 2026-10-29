@@ -17,8 +17,6 @@ public sealed class SheepheadSession : GameSession<SheepheadState, SheepheadActi
     /// <summary>Cards chosen to bury, in the order chosen.</summary>
     private readonly List<Card> _selected = [];
 
-    /// <summary>The hand whose blind and bury have been read out, so they are said once.</summary>
-    private int _revealedHand;
 
     public SheepheadSession(AppSettings settings, Announcer announcer, RandomSource? rng = null)
         : base(GameKind.Sheephead, settings, announcer, new SheepheadEngine(), rng) { }
@@ -51,7 +49,6 @@ public sealed class SheepheadSession : GameSession<SheepheadState, SheepheadActi
     protected override void OnNewGame()
     {
         _selected.Clear();
-        _revealedHand = 0;
         Controllers = Enumerable.Range(0, SeatsFromSettings)
             .Select(i => i == Me ? SeatController.Local : SeatController.Computer).ToArray();
     }
@@ -380,15 +377,9 @@ public sealed class SheepheadSession : GameSession<SheepheadState, SheepheadActi
     /// </summary>
     protected override void TurnCameToMe()
     {
-        if (State.Phase == SheepheadPhase.HandOver)
-        {
-            if (_revealedHand != State.HandNumber)
-            {
-                _revealedHand = State.HandNumber;
-                Announcer.Say(SheepheadReview.BlindReveal(State), AnnouncementCategory.Scoring);
-            }
-            return;
-        }
+        // The engine's hand summary has just named the blind and the buried cards, and On the
+        // table keeps them; saying them again here was the same list twice.
+        if (State.Phase == SheepheadPhase.HandOver) return;
         // At the pick, the choice is a button, not a card: focus goes to Pick up the blind.
         if (State.Phase == SheepheadPhase.Pick && IsMyTurn)
         {

@@ -22,6 +22,6 @@
             </StatusBarItem>
         </StatusBar>
 
-        <ContentControl x:Name="Page" Focusable="False" />
+        <Grid x:Name="Pages" />
     </DockPanel>
 </Window>
