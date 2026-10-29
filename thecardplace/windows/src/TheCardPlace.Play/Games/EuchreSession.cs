@@ -162,9 +162,14 @@ public sealed class EuchreSession : GameSession<EuchreState, EuchreAction>
     }
 
     public override IReadOnlyList<string> TableLines =>
-        State.Phase is EuchrePhase.HandOver or EuchrePhase.GameOver && EuchreReview.DealReveal(State) is { } reveal
-            ? [EuchreReview.LastTrick(State, Me), reveal]
-            : [EuchreReview.LastTrick(State, Me)];
+    [
+        .. TrickLines(State.Trick.Select(t => (t.Player, t.Card)).ToList(), c => EuchreCards.Describe(c, State.Trump),
+            State.Trick.Count > 0 ? State.Trick[EuchreGame.TrickWinnerIndex(State.Trick, State.Trump)].Player : null),
+        .. State.LastTrick is { } lt
+            ? LastTrickLines(lt.Plays.Select(t => (t.Player, t.Card)).ToList(), lt.Winner, "", c => EuchreCards.Describe(c, State.Trump))
+            : [],
+        .. State.Phase is EuchrePhase.HandOver or EuchrePhase.GameOver && EuchreReview.DealReveal(State) is { } reveal ? [reveal] : (string[])[],
+    ];
 
     public override string TableNote => State.Phase switch
     {

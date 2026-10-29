@@ -87,7 +87,15 @@ public sealed class HeartsSession : GameSession<HeartsState, HeartsAction>
         }
     }
 
-    public override IReadOnlyList<string> TableLines => [HeartsReview.LastTrick(State, Me)];
+    public override IReadOnlyList<string> TableLines =>
+    [
+        .. TrickLines(State.Trick.Select(t => (t.Seat, t.Card)).ToList(), HeartsCards.Describe, WinningSeat),
+        .. State.LastTrick is { } lt
+            ? LastTrickLines(lt.Cards.Select(t => (t.Seat, t.Card)).ToList(), lt.Winner, HeartsGame.PointsTail(lt.Points), HeartsCards.Describe)
+            : [],
+    ];
+
+    private int? WinningSeat => Seats.FirstOrDefault(s => s.PlayedNote?.Contains("winning", StringComparison.Ordinal) == true)?.Seat;
 
     public override string TableNote => State.Phase switch
     {
