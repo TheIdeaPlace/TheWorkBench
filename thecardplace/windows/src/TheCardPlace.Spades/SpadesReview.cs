@@ -59,7 +59,7 @@ public static class SpadesReview
         var parts = state.Trick.Select(p => $"{SeatName(state, p.Seat)} played the {p.Card.Name}");
         var led = state.Trick[0].Card.Suit;
         var w = G.TrickWinner(state.Trick)!;
-        return string.Join(", ", parts) + $". {led.Name()} was led. {SeatName(state, w.Seat)} is winning it.";
+        return string.Join(", ", parts) + $". {led.Name()} were led. {SeatName(state, w.Seat)} is winning it.";
     }
 
     // MARK: L, the last trick
@@ -212,7 +212,7 @@ public static class SpadesReview
                     : need == 0 ? " Your contract is made."
                     : $" {BagWord(-need)} over.";
                 if (state.Turn == me)
-                    return "Your turn. " + (state.Trick.Count == 0 ? "You lead." : $"{state.Trick[0].Card.Suit.Name()} was led.") + tail;
+                    return "Your turn. " + (state.Trick.Count == 0 ? "You lead." : $"{state.Trick[0].Card.Suit.Name()} were led.") + tail;
                 return $"Waiting for {SeatName(state, state.Turn)}." + tail;
             }
             case SpadesPhase.HandOver:

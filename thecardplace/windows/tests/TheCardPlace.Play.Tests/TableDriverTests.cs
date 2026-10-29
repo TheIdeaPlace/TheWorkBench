@@ -289,3 +289,46 @@ public class OnTheTableTests
         Assert.Equal(played, s.TableLines.Count(l => l.Contains(" led the ", StringComparison.Ordinal) || l.Contains(" played the ", StringComparison.Ordinal)));
     }
 }
+
+/// <summary>What the app says has no punctuation a screen reader would read aloud.</summary>
+public class SpokenTextTests
+{
+    [Theory]
+    [InlineData("Trick 5 of 7 — your turn to play.", "Trick 5 of 7. Your turn to play.")]
+    [InlineData("Score: Kelly and Marta 4, Ruth and Dale 0.", "Score, Kelly and Marta 4, Ruth and Dale 0.")]
+    [InlineData("Dale alone took 40 points (including 11 buried); the defenders took 80.", "Dale alone took 40 points, including 11 buried. The defenders took 80.")]
+    [InlineData("Marta picks up the blind (2 cards). Marta buries 2 cards.", "Marta picks up the blind, 2 cards. Marta buries 2 cards.")]
+    [InlineData("two runs of three for six — sixteen.", "Two runs of three for six. Sixteen.")]
+    [InlineData("Up card: Queen of Diamonds, trump. Put back: Nine of Spades.", "Up card, Queen of Diamonds, trump. Put back, Nine of Spades.")]
+    [InlineData("Kelly 26, Ruth 16.", "Kelly 26, Ruth 16.")]
+    [InlineData("The count is 24 — your turn.", "The count is 24. Your turn.")]
+    [InlineData("", "")]
+    public void Marks_a_screen_reader_would_say_are_reworded(string text, string expected) =>
+        Assert.Equal(expected, SpokenText.Plain(text));
+
+    [Theory]
+    [InlineData(1UL)]
+    [InlineData(2UL)]
+    public void Nothing_spoken_in_a_whole_game_carries_those_marks(ulong seed)
+    {
+        foreach (var kind in GameKinds.All)
+        {
+            var settings = Table.Settings(kind);
+            var speaker = new RecordingSpeaker();
+            var announcer = new Announcer(settings.Announcements, speaker);
+            var s = GameFactory.Create(kind, settings, announcer, new RandomSource(seed));
+            s.Start();
+            for (var guard = 0; guard < 200; guard++)
+            {
+                if (s.Primary.Enabled && s.Primary.Key == 'n') { s.Advance(); continue; }
+                var card = s.Hand.FirstOrDefault(h => h.Playable);
+                var choice = s.Secondary.FirstOrDefault(c => c.Kind == ControlKind.Button);
+                if (choice is not null) choice.Action();
+                else if (card is not null) { s.Activate(card); if (s.Primary.Enabled && s.Primary.Key != 'n') s.Primary.Action(); }
+                else break;
+            }
+            Assert.All(speaker.Spoken, x => Assert.DoesNotMatch(@"[—–;()]|:\s", x.Text));
+            Assert.All(s.Log, l => Assert.DoesNotMatch(@"[—–;()]|:\s", l));
+        }
+    }
+}

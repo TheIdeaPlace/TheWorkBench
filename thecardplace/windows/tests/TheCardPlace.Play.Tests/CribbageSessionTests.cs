@@ -103,8 +103,10 @@ public class CribbageSessionTests
         Assert.Equal("Deal another game", s.Primary.Title);
         Assert.Equal(["new"], s.Secondary.Select(c => c.Id));
         Assert.NotEmpty(s.History.Rows);
-        Assert.Contains(s.Log, l => l.Contains(" hand: ", StringComparison.Ordinal));
-        Assert.Contains(speaker.Spoken, x => x.Text.Contains("your turn", StringComparison.Ordinal));
+        Assert.Contains(s.Log, l => l.Contains(" hand, ", StringComparison.Ordinal));
+        Assert.Contains(speaker.Spoken, x => x.Text.Contains("Your turn.", StringComparison.Ordinal));
+        // The play line says the count; the turn no longer says it a second time.
+        Assert.DoesNotContain(speaker.Spoken, x => x.Text.Contains(" — your turn", StringComparison.Ordinal));
         Assert.Equal("Games won", s.Scores.Columns[^1]);
         Assert.False(s.InProgress);
 
@@ -130,7 +132,7 @@ public class CribbageSessionTests
         for (var guard = 0; guard < 10 && s.State.Phase == CribbagePhase.CutForDeal; guard++) s.Advance();
         Assert.Equal(CribbagePhase.Discard, s.State.Phase);
         Assert.Equal(6, s.Hand.Count);
-        Assert.Contains(heard, a => a.Text.Contains("Your six cards: ", StringComparison.Ordinal));
+        Assert.Contains(heard, a => a.Text.Contains("Your six cards, ", StringComparison.Ordinal));
         Assert.StartsWith(s.State.Dealer == 0 ? "Your crib." : "Ruth’s crib.", s.TableNote, StringComparison.Ordinal);
     }
 
@@ -166,7 +168,7 @@ public class CribbageSessionTests
         var before = Snapshot.Json(s.State);
         s.Activate(Table.CardIn(s, cards[2].Card));
         Assert.True(heard[^1].Forced);
-        Assert.StartsWith("Two cards are already chosen: ", heard[^1].Text, StringComparison.Ordinal);
+        Assert.StartsWith("Two cards are already chosen, ", heard[^1].Text, StringComparison.Ordinal);
         Assert.False(Table.CardIn(s, cards[2].Card).Chosen);
         Assert.Equal(before, Snapshot.Json(s.State));
 
@@ -223,7 +225,7 @@ public class CribbageSessionTests
         s.Activate(bad);
         Assert.Equal(before, Snapshot.Json(s.State));
         Assert.True(heard[^1].Forced);
-        Assert.Equal($"{bad.Card.Name} cannot be played: {CribbageGame.WhyNot(s.State, 0, bad.Card)}.", heard[^1].Text);
+        Assert.Equal(SpokenText.Plain($"{bad.Card.Name} cannot be played: {CribbageGame.WhyNot(s.State, 0, bad.Card)}."), heard[^1].Text);
     }
 
     [Theory]
@@ -268,16 +270,16 @@ public class CribbageSessionTests
         Assert.Equal(CribbagePhase.Count, s.State.Phase);
         Assert.Equal("Next", s.Primary.Title);
         Assert.Equal('n', s.Primary.Key);
-        Assert.Contains("yours to count", speaker.Spoken[^1].Text, StringComparison.Ordinal);
+        Assert.Contains("Yours to count", speaker.Spoken[^1].Text, StringComparison.Ordinal);
         Assert.Contains(" with the ", s.TableNote, StringComparison.Ordinal);
         Assert.Empty(s.Hand);
         var stage = s.State.CountStage;
         s.Advance();
         Assert.True(s.State.CountStage > stage || s.State.Phase is CribbagePhase.RoundOver or CribbagePhase.GameOver);
         // Read in its parts: the cards, the starter, then each way it scores and the total.
-        var counted = s.Log.First(l => l.StartsWith("Kelly’s hand: ", StringComparison.Ordinal) || l.StartsWith("Kelly’s crib: ", StringComparison.Ordinal));
+        var counted = s.Log.First(l => l.StartsWith("Kelly’s hand, ", StringComparison.Ordinal) || l.StartsWith("Kelly’s crib, ", StringComparison.Ordinal));
         Assert.Contains(" with the ", counted, StringComparison.Ordinal);
-        Assert.Contains(s.Log, l => l == s.Reviews.First(r => r.Key == 'l').Text());
+        Assert.Contains(s.Log, l => l == SpokenText.Plain(s.Reviews.First(r => r.Key == 'l').Text()));
     }
 
     [Fact]

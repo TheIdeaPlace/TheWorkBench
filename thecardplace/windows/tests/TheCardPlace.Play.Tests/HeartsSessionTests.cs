@@ -95,7 +95,7 @@ public class HeartsSessionTests
         s.Activate(bad);
         Assert.Equal(before, Snapshot.Json(s.State));
         Assert.True(heard[^1].Forced);
-        Assert.StartsWith($"{bad.Card.Name} cannot be played: ", heard[^1].Text, StringComparison.Ordinal);
+        Assert.StartsWith($"{bad.Card.Name} cannot be played, ", heard[^1].Text, StringComparison.Ordinal);
     }
 
     [Fact]

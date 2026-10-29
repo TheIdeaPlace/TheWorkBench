@@ -36,10 +36,10 @@ public class ReviewTests
         Assert.Equal("No trick has been completed yet.", SpadesReview.LastTrick(state));
         PlayIn(state, 0, "2H");
         PlayIn(state, 1, "KH");
-        Assert.Equal("You played the Two of Hearts, East played the King of Hearts. Hearts was led. East is winning it.",
+        Assert.Equal("You played the Two of Hearts, East played the King of Hearts. Hearts were led. East is winning it.",
             SpadesReview.Trick(state));
         PlayIn(state, 2, "2S");
-        Assert.Equal("You played the Two of Hearts, East played the King of Hearts, South played the Two of Spades. Hearts was led. South is winning it.",
+        Assert.Equal("You played the Two of Hearts, East played the King of Hearts, South played the Two of Spades. Hearts were led. South is winning it.",
             SpadesReview.Trick(state));
         Assert.Equal("Play goes You, then East, then South, then West.", SpadesReview.PlayOrder(state));
         PlayIn(state, 3, "AH");
@@ -159,7 +159,7 @@ public class ReviewTests
         Assert.Equal("Your turn. You lead. You need 2 more.", SpadesReview.Status(state, 0));
         PlayIn(state, 0, "2C");
         Assert.Equal("Waiting for East. You need 2 more.", SpadesReview.Status(state, 0));
-        Assert.Equal("Your turn. Clubs was led. 1 bag over.", SpadesReview.Status(state, 1));
+        Assert.Equal("Your turn. Clubs were led. 1 bag over.", SpadesReview.Status(state, 1));
         state.Players[0].Tricks = 4;
         Assert.Equal("Waiting for East. Your contract is made.", SpadesReview.Status(state, 0));
         state.Players[0].Tricks = 6;

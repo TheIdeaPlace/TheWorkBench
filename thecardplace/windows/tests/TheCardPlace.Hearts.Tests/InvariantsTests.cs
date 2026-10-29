@@ -241,7 +241,8 @@ public class InvariantsTests
         var handEvents = end.Log.Events.Where(e => e.Kind == EventKind.Hand).ToList();
         Assert.Equal(end.History.Count, handEvents.Count);
         var h = end.History[0];
-        Assert.Equal($"Hand 1 over. North {h.Points[0]}, East {h.Points[1]}, South {h.Points[2]}, West {h.Points[3]}.", handEvents[0].Text);
+        Assert.Equal($"Hand 1 over. This hand, North {h.Points[0]}, East {h.Points[1]}, South {h.Points[2]} and West {h.Points[3]}. "
+            + $"Scores, North {h.Scores[0]}, East {h.Scores[1]}, South {h.Scores[2]} and West {h.Scores[3]}.", handEvents[0].Text);
         var game = end.Log.Events.Last(e => e.Kind == EventKind.Game);
         if (end.Winner is { } w)
             Assert.Equal($"{Names[w]} wins with {end.Players[w].Score}. Lowest score wins.", game.Text);

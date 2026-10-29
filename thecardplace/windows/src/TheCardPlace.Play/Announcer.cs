@@ -125,7 +125,7 @@ public sealed class Announcer
     /// </param>
     public void Say(string text, AnnouncementCategory category = AnnouncementCategory.Result, bool force = false, bool followsFocus = false)
     {
-        var t = text.Trim();
+        var t = SpokenText.Plain(text.Trim());
         if (t.Length == 0) return;
         var spoken = force || WouldSpeak(category);
         var interrupt = !followsFocus && (force || category.Interrupts());
@@ -153,7 +153,7 @@ public sealed class Announcer
     /// </summary>
     public void SayBatch(IEnumerable<(string Text, AnnouncementCategory Category)> parts)
     {
-        var all = parts.Where(p => p.Text.Trim().Length > 0).ToList();
+        var all = parts.Select(p => (Text: SpokenText.Plain(p.Text.Trim()), p.Category)).Where(p => p.Text.Length > 0).ToList();
         if (all.Count == 0) return;
         var heard = all.Where(p => WouldSpeak(p.Category)).ToList();
         var whole = string.Join(" ", all.Select(p => p.Text.Trim()));

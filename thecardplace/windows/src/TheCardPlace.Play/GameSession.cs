@@ -121,7 +121,8 @@ public abstract class GameSession : IDisposable
         if (Settings.MoveFocusOnTurn) FocusChoicesRequested?.Invoke();
     }
 
-    protected void AddLog(string text) => _log.Insert(0, text);
+    /// <summary>A log line, worded for the ear: the log is a list a screen reader reads.</summary>
+    protected void AddLog(string text) => _log.Insert(0, SpokenText.Plain(text));
 
     protected void ClearLog() => _log.Clear();
 

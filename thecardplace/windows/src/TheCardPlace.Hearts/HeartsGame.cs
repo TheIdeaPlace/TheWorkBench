@@ -451,8 +451,11 @@ public static class HeartsGame
             Scores = state.Players.Select(p => p.Score).ToList(),
         });
 
-        state.Log.Add(EventKind.Hand, $"Hand {state.DealNumber} over. "
-            + string.Join(", ", state.Players.Select(p => $"{p.Name} {p.HandPoints}")) + ".");
+        // The hand's points and then the running scores: without the scores a player can't tell
+        // where anyone stands, or why the game has just ended, without asking.
+        state.Log.Add(EventKind.Hand, $"Hand {state.DealNumber} over. This hand, "
+            + Prose.List(state.Players.Select(p => $"{p.Name} {p.HandPoints}")) + ". Scores, "
+            + Prose.List(state.Players.Select(p => $"{p.Name} {p.Score}")) + ".");
 
         var target = Target(state);
         if (state.Players.Any(p => p.Score >= target))
@@ -461,6 +464,8 @@ public static class HeartsGame
             var winners = state.Players.Where(p => p.Score == low).ToList();
             state.Winner = winners.Count == 1 ? winners[0].Index : null;
             state.Phase = HeartsPhase.GameOver;
+            var over = state.Players.Where(p => p.Score >= target).ToList();
+            state.Log.Add(EventKind.Game, $"{Prose.List(over.Select(p => p.Name))} reached {target}, so the game is over.");
             if (winners.Count == 1)
                 state.Log.Add(EventKind.Game, $"{winners[0].Name} wins with {low}. Lowest score wins.", seat: winners[0].Index);
             else

@@ -96,8 +96,8 @@ public partial class GameView : UserControl
 
     public void Refresh()
     {
-        StatusLine.Text = Session.Status;
-        TableNote.Text = Session.TableNote;
+        StatusLine.Text = SpokenText.Plain(Session.Status);
+        TableNote.Text = SpokenText.Plain(Session.TableNote);
         TableNote.Visibility = Session.TableNote.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
         RefreshHand();
         RefreshSeats();
@@ -116,7 +116,7 @@ public partial class GameView : UserControl
 
     private void RefreshLines()
     {
-        var lines = new[] { Session.TableNote }.Concat(Session.TableLines).Where(l => l.Length > 0).ToList();
+        var lines = new[] { Session.TableNote }.Concat(Session.TableLines).Where(l => l.Length > 0).Select(SpokenText.Plain).ToList();
         if (LinesList.ItemsSource is List<string> old && old.SequenceEqual(lines)) return;
         var focused = LinesList.IsKeyboardFocusWithin ? Math.Max(0, LinesList.SelectedIndex) : -1;
         LinesList.ItemsSource = lines;

@@ -40,10 +40,11 @@ public sealed record SeatInfo(int Seat, string Name, string Position, string Det
         {
             var parts = new List<string> { IsMe ? Name + " (you)" : Name };
             if (Position.Length > 0) parts[0] += ", " + Position;
-            if (Played is not null) parts.Add("played " + (PlayedDescription ?? Played.Value.Name) + (PlayedNote is { Length: > 0 } n ? ", " + n : ""));
-            if (IsTurn) parts.Add(TurnWord);
-            if (Detail.Length > 0) parts.Add(Detail);
-            return string.Join("; ", parts);
+            if (Played is not null) parts.Add("Played " + (PlayedDescription ?? Played.Value.Name) + (PlayedNote is { Length: > 0 } n ? ", " + n : ""));
+            if (IsTurn) parts.Add(char.ToUpperInvariant(TurnWord[0]) + TurnWord[1..]);
+            if (Detail.Length > 0) parts.Add(char.ToUpperInvariant(Detail[0]) + Detail[1..]);
+            // Sentences, not semicolons: JAWS says "semicolon" aloud at its standard punctuation.
+            return string.Join(". ", parts) + ".";
         }
     }
 }

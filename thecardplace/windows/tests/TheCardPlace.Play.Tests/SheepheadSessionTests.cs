@@ -97,8 +97,10 @@ public class SheepheadSessionTests
         Assert.All(s.State.History, h => Assert.Empty(h.Problems));
         Assert.Equal(0, s.State.Players.Sum(p => p.Score));
         Assert.Contains(speaker.Spoken, x => x.Id == "TheCardPlace.Turn");
-        // The blind and the bury are read out at the end of each hand.
-        Assert.Contains(speaker.Spoken, x => x.Text.Contains("Blind: ", StringComparison.Ordinal));
+        // The blind and the bury are said once at the end of each hand, in the hand summary,
+        // and kept in On the table; the second read-out is gone.
+        Assert.Contains(speaker.Spoken, x => x.Text.Contains("The blind held ", StringComparison.Ordinal));
+        Assert.DoesNotContain(speaker.Spoken, x => x.Text.StartsWith("The blind, and what", StringComparison.Ordinal));
         if (allPass == "redeal") Assert.DoesNotContain(s.State.History, h => h.IsLeaster);
         Assert.Equal(["", "left"], s.Seats.Take(2).Select(x => x.Position));
         Assert.Equal("right", s.Seats[^1].Position);
@@ -174,7 +176,7 @@ public class SheepheadSessionTests
         var before = Snapshot.Json(s.State);
         s.Advance();
         Assert.Equal(before, Snapshot.Json(s.State));
-        Assert.Equal(s.Status, heard[^1].Text);
+        Assert.Equal(SpokenText.Plain(s.Status), heard[^1].Text);
         s.Activate(s.Hand[0]);
         Assert.Equal(before, Snapshot.Json(s.State));
         Assert.StartsWith("Pick or pass first.", heard[^1].Text, StringComparison.Ordinal);
@@ -230,7 +232,7 @@ public class SheepheadSessionTests
         Assert.Equal(("Choose Bury to put them down.", AnnouncementCategory.Hint), (heard[^1].Text, heard[^1].Category));
         s.Activate(Table.CardIn(s, cards[2]));
         Assert.True(heard[^1].Forced);
-        Assert.Equal($"Two cards are already chosen: {cards[0].Name} and {cards[1].Name}. Remove one first.", heard[^1].Text);
+        Assert.Equal($"Two cards are already chosen, {cards[0].Name} and {cards[1].Name}. Remove one first.", heard[^1].Text);
         Assert.False(Table.CardIn(s, cards[2]).Chosen);
 
         Assert.Equal("Bury 2 of 2", s.Primary.Title);
@@ -260,7 +262,7 @@ public class SheepheadSessionTests
         s.Activate(bad);
         Assert.Equal(before, Snapshot.Json(s.State));
         Assert.True(heard[^1].Forced);
-        Assert.Equal($"{bad.Card.Name} cannot be played: {bad.Reason}.", heard[^1].Text);
+        Assert.Equal(SpokenText.Plain($"{bad.Card.Name} cannot be played: {bad.Reason}."), heard[^1].Text);
     }
 
     [Fact]

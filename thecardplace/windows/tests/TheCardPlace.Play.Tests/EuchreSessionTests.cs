@@ -159,7 +159,7 @@ public class EuchreSessionTests
         var before = Snapshot.Json(s.State);
         s.Advance();
         Assert.Equal(before, Snapshot.Json(s.State));
-        Assert.Equal(s.Status, heard[^1].Text);
+        Assert.Equal(SpokenText.Plain(s.Status), heard[^1].Text);
     }
 
     [Fact]
@@ -210,8 +210,8 @@ public class EuchreSessionTests
         Assert.Equal("Deal the next hand", s.Primary.Title);
         Assert.Equal("thrown in", s.History.Rows[^1][^1]);
         // What was face down is read once, and kept in the log.
-        Assert.Contains(speaker.Spoken, x => x.Text.Contains("Kitty: ", StringComparison.Ordinal));
-        Assert.Contains(s.Log, l => l.Contains("Kitty: ", StringComparison.Ordinal));
+        Assert.Contains(speaker.Spoken, x => x.Text.Contains("Kitty, ", StringComparison.Ordinal));
+        Assert.Contains(s.Log, l => l.Contains("Kitty, ", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -363,7 +363,7 @@ public class EuchreSessionTests
         s.Activate(bad);
         Assert.Equal(before, Snapshot.Json(s.State));
         Assert.True(heard[^1].Forced);
-        Assert.StartsWith($"{bad.Card.Name} cannot be played: you must follow ", heard[^1].Text, StringComparison.Ordinal);
+        Assert.StartsWith($"{bad.Card.Name} cannot be played, you must follow ", heard[^1].Text, StringComparison.Ordinal);
     }
 
     [Fact]
