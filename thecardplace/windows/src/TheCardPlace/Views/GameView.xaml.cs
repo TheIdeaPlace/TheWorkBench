@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Windows;
 using System.Windows.Automation;
+using System.Windows.Automation.Peers;
 using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Input;
@@ -15,6 +16,13 @@ namespace TheCardPlace.App.Views;
 /// </summary>
 public partial class GameView : UserControl
 {
+    /// <summary>
+    /// No automation element for the page itself: its controls sit straight under the window.
+    /// The page has no name, so JAWS made one from all the text in it ("Status ... Table Your
+    /// hand On the table Scores ... Game log") and read it out whenever the cards changed.
+    /// </summary>
+    protected override AutomationPeer? OnCreateAutomationPeer() => null;
+
     private readonly MainWindow _window;
     private readonly ObservableCollection<HandItem> _hand = [];
     private readonly ObservableCollection<SeatItem> _seats = [];
@@ -193,6 +201,9 @@ public partial class GameView : UserControl
             }
             else
             {
+                // The button is renamed for what comes next ("Next", "Deal the next hand") before
+                // focus lands on it, so only its new name is read.
+                SetButton(PrimaryButton, Session.Gate.IsWaiting ? Session.ContinueControl : Session.Primary);
                 FocusPrimary();
             }
         }

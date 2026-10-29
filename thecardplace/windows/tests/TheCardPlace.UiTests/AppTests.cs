@@ -379,7 +379,10 @@ public sealed partial class AppTests : IDisposable
         {
             handler.Dispose();
         }
-        Assert.DoesNotContain(landed, l => l.StartsWith($"{ControlType.Window}|", StringComparison.Ordinal));
+        // Only ever a card or a control: never the window, the page or a pane round the lists.
+        var allowed = new[] { ControlType.ListItem, ControlType.Button, ControlType.ComboBox, ControlType.CheckBox };
+        var stray = landed.Where(l => !allowed.Any(t => l.StartsWith($"{t}|", StringComparison.Ordinal))).ToList();
+        Assert.True(stray.Count == 0, "Focus landed on " + string.Join(" ; ", stray) + "\nAll: " + string.Join(" ; ", landed));
         Assert.Contains(landed, l => l.StartsWith($"{ControlType.ListItem}|", StringComparison.Ordinal));
     }
 
