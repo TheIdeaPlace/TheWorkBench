@@ -265,6 +265,9 @@ public sealed partial class AppTests : IDisposable
     {
         StartGame("Hearts, four players", "Hearts");
         var first = WaitForFocus(e => e.ControlType == ControlType.ListItem && e.Parent.Name == "Your hand", "a card");
+        // The selection follows focus, so it isn't offered: Narrator said "selected" on every card.
+        Assert.False(first.Patterns.SelectionItem.IsSupported);
+        Assert.False(first.Parent.Patterns.Selection.IsSupported);
         Send(VirtualKeyShort.RIGHT);
         var second = WaitForFocus(e => e.Name != first.Name && e.Parent.Name == "Your hand", "the next card");
         Send(VirtualKeyShort.LEFT);
