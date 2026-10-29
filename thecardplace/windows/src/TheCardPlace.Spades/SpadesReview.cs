@@ -59,6 +59,7 @@ public static class SpadesReview
         var parts = state.Trick.Select(p => $"{SeatName(state, p.Seat)} played the {p.Card.Name}");
         var led = state.Trick[0].Card.Suit;
         var w = G.TrickWinner(state.Trick)!;
+        // Not yet in Swift or the browser, which say "Clubs was led": a suit is plural.
         return string.Join(", ", parts) + $". {led.Name()} were led. {SeatName(state, w.Seat)} is winning it.";
     }
 

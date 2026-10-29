@@ -304,7 +304,7 @@ public class CribbageSessionTests
     {
         var (s, _, _, _) = Table.Make<CribbageSession>(GameKind.Cribbage, 2, settings: To(61));
         s.Start();
-        Assert.Equal("Kelly (you), score 0, to go 61", s.Scores.RowName(0));
+        Assert.Equal("Kelly, you, score 0, to go 61", s.Scores.RowName(0));
         Assert.Equal("Ruth, score 0, to go 61", s.Scores.RowName(1));
     }
 

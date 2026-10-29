@@ -452,7 +452,8 @@ public static class HeartsGame
         });
 
         // The hand's points and then the running scores: without the scores a player can't tell
-        // where anyone stands, or why the game has just ended, without asking.
+        // where anyone stands, or why the game has just ended, without asking. Not yet in Swift or
+        // the browser, which give only the hand's points and no "reached" line.
         state.Log.Add(EventKind.Hand, $"Hand {state.DealNumber} over. This hand, "
             + Prose.List(state.Players.Select(p => $"{p.Name} {p.HandPoints}")) + ". Scores, "
             + Prose.List(state.Players.Select(p => $"{p.Name} {p.Score}")) + ".");

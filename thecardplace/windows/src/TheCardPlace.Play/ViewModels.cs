@@ -38,7 +38,7 @@ public sealed record SeatInfo(int Seat, string Name, string Position, string Det
     {
         get
         {
-            var parts = new List<string> { IsMe ? Name + " (you)" : Name };
+            var parts = new List<string> { IsMe ? Name + ", you" : Name };
             if (Position.Length > 0) parts[0] += ", " + Position;
             if (Played is not null) parts.Add("Played " + (PlayedDescription ?? Played.Value.Name) + (PlayedNote is { Length: > 0 } n ? ", " + n : ""));
             if (IsTurn) parts.Add(char.ToUpperInvariant(TurnWord[0]) + TurnWord[1..]);
@@ -51,7 +51,7 @@ public sealed record SeatInfo(int Seat, string Name, string Position, string Det
 
 /// <summary>
 /// A table of numbers that belong to players. Read row by row, with the first column unnamed and
-/// every other value preceded by its column name: "Ruth (you), score 12, tricks 3". Spoken order is
+/// every other value preceded by its column name: "Ruth, you, score 12, tricks 3". Spoken order is
 /// on-screen order. Fixed headings are said in lower case mid-row ("score 12"); columns from
 /// <paramref name="NamedFrom"/> on are players' or sides' names and keep their capitals.
 /// </summary>
@@ -68,7 +68,8 @@ public sealed record ScoreTable(string Title, IReadOnlyList<string> Columns, IRe
             if (i == 0 || i >= Columns.Count || Columns[i].Length == 0) parts.Add(r[i]);
             else parts.Add((i >= NamedFrom ? Columns[i] : Columns[i].ToLowerInvariant()) + " " + r[i]);
         }
-        return string.Join(", ", parts);
+        // The cells say "Ruth (you)"; JAWS would read the brackets aloud.
+        return SpokenText.Plain(string.Join(", ", parts));
     }
 }
 

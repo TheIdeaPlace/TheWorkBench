@@ -628,8 +628,7 @@ public static class EuchreGame
         }
         else
         {
-            var points = PointWords(r.Deltas[makerTeam]);
-            summary += $"{char.ToUpperInvariant(points[0])}{points[1..]} to {SideWords(s, makerTeam)}.";
+            summary += $"{PointWords(r.Deltas[makerTeam])} to {SideWords(s, makerTeam)}.";
         }
         summary += $" Score: {SideWords(s, 0)} {s.Scores[0]}, {SideWords(s, 1)} {s.Scores[1]}.";
 

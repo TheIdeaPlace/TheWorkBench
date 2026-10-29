@@ -302,6 +302,18 @@ public class SpokenTextTests
     [InlineData("Up card: Queen of Diamonds, trump. Put back: Nine of Spades.", "Up card, Queen of Diamonds, trump. Put back, Nine of Spades.")]
     [InlineData("Kelly 26, Ruth 16.", "Kelly 26, Ruth 16.")]
     [InlineData("The count is 24 — your turn.", "The count is 24. Your turn.")]
+    [InlineData("Tied on 52: Kelly and Marta.", "Tied on 52, Kelly and Marta.")]
+    [InlineData("Game 1 to 10: you 4, them 6.", "Game 1 to 10, you 4, them 6.")]
+    [InlineData("Hand 3: Kelly took 2 tricks.", "Hand 3, Kelly took 2 tricks.")]
+    [InlineData("At 3:30 the game ended.", "At 3:30 the game ended.")]
+    [InlineData("Kelly alone (the Jack of Diamonds was buried) took 40 points.", "Kelly alone, the Jack of Diamonds was buried, took 40 points.")]
+    [InlineData("Kelly (you) led.", "Kelly, you, led.")]
+    [InlineData("(you) lead the Two.", "You, lead the Two.")]
+    [InlineData("Ruth (you), score 12", "Ruth, you, score 12")]
+    [InlineData("Wait...", "Wait.")]
+    [InlineData("Thinking… done", "Thinking. Done")]
+    [InlineData("Tricks 7–3.", "Tricks 7–3.")]
+    [InlineData("Seven – three.", "Seven. Three.")]
     [InlineData("", "")]
     public void Marks_a_screen_reader_would_say_are_reworded(string text, string expected) =>
         Assert.Equal(expected, SpokenText.Plain(text));
@@ -318,17 +330,21 @@ public class SpokenTextTests
             var announcer = new Announcer(settings.Announcements, speaker);
             var s = GameFactory.Create(kind, settings, announcer, new RandomSource(seed));
             s.Start();
-            for (var guard = 0; guard < 200; guard++)
+            // To the end of the game, asking every review key on the way, so the game-over and
+            // review sentences are checked too.
+            var reviews = new List<string>();
+            var moves = 0;
+            var ended = WholeGame.Play(s, seed, () =>
             {
-                if (s.Primary.Enabled && s.Primary.Key == 'n') { s.Advance(); continue; }
-                var card = s.Hand.FirstOrDefault(h => h.Playable);
-                var choice = s.Secondary.FirstOrDefault(c => c.Kind == ControlKind.Button);
-                if (choice is not null) choice.Action();
-                else if (card is not null) { s.Activate(card); if (s.Primary.Enabled && s.Primary.Key != 'n') s.Primary.Action(); }
-                else break;
-            }
-            Assert.All(speaker.Spoken, x => Assert.DoesNotMatch(@"[—–;()]|:\s", x.Text));
-            Assert.All(s.Log, l => Assert.DoesNotMatch(@"[—–;()]|:\s", l));
+                if (moves++ % 5 == 0) reviews.AddRange(s.Reviews.Select(r => SpokenText.Plain(r.Text())));
+            });
+            reviews.AddRange(s.Reviews.Select(r => SpokenText.Plain(r.Text())));
+            Assert.True(ended, $"{kind} did not finish: {s.Status}");
+            // A spaced en dash is a break; "7–3" is a score and stays.
+            const string marks = @"[—;()]|\s–\s|:\s";
+            Assert.All(speaker.Spoken, x => Assert.DoesNotMatch(marks, x.Text));
+            Assert.All(s.Log, l => Assert.DoesNotMatch(marks, l));
+            Assert.All(reviews, r => Assert.DoesNotMatch(marks, r));
         }
     }
 }

@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Threading;
 using TheCardPlace.App.Views;
 using TheCardPlace.Core;
 using TheCardPlace.Play;
@@ -81,8 +82,22 @@ public partial class MainWindow : Window
         if (!Pages.Children.Contains(page)) Pages.Children.Add(page);
         page.Visibility = Visibility.Visible;
         ApplyZoom(page);
-        Pages.UpdateLayout();
-        focus();
+        if (IsLoaded)
+        {
+            Pages.UpdateLayout();
+            focus();
+        }
+        else
+        {
+            // At start-up the window isn't shown yet, so the page has no items to focus. Wait for
+            // it, else focus lands on the list and then hops to the item, and that is read twice.
+            Loaded += FocusOnce;
+            void FocusOnce(object? s, RoutedEventArgs e)
+            {
+                Loaded -= FocusOnce;
+                Dispatcher.BeginInvoke(DispatcherPriority.Input, focus);
+            }
+        }
         foreach (var old in Pages.Children.OfType<FrameworkElement>().Where(p => !ReferenceEquals(p, page)).ToList())
             Pages.Children.Remove(old);
     }

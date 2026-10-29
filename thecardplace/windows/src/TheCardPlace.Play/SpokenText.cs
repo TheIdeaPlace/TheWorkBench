@@ -19,17 +19,20 @@ public static partial class SpokenText
     {
         if (string.IsNullOrEmpty(text)) return text;
         var s = text;
-        // "(2 cards)" -> ", 2 cards"
-        s = Brackets().Replace(s, m => ", " + m.Groups[1].Value.Trim());
-        // "a — b", "a; b" -> "a. B"
+        // "Wait..." -> "Wait."
+        s = Ellipsis().Replace(s, ".");
+        // "Kelly alone (the Jack was buried) took 40" -> "Kelly alone, the Jack was buried, took 40"
+        s = Brackets().Replace(s, m => ", " + m.Groups[1].Value.Trim() + ", ");
+        // "a — b", "a; b", "a – b" -> "a. B" (but "7–3" stays)
         s = SentenceBreak().Replace(s, ". ");
-        // "Score: Kelly" -> "Score, Kelly" (not a time such as 3:30)
+        // "Score: Kelly", "Hand 3: Kelly" -> "Score, Kelly" (not a time such as 3:30)
         s = Colon().Replace(s, ", ");
         // Tidy what the replacements leave: ", ." ", ," ". ." and doubled spaces.
         s = CommaThenStop().Replace(s, ".");
         s = DoubleComma().Replace(s, ", ");
         s = DoubleStop().Replace(s, ". ");
         s = Spaces().Replace(s, " ").Trim();
+        if (s.StartsWith(',')) s = s[1..].TrimStart();
         if (s.EndsWith(',')) s = s[..^1] + ".";
         return CapitaliseSentences(s);
     }
@@ -47,10 +50,13 @@ public static partial class SpokenText
     [GeneratedRegex(@"\s*\(([^()]*)\)")]
     private static partial Regex Brackets();
 
-    [GeneratedRegex(@"\s*[—–;]\s*")]
+    [GeneratedRegex(@"\.{3}|…")]
+    private static partial Regex Ellipsis();
+
+    [GeneratedRegex(@"\s*[—;]\s*|\s+–\s+")]
     private static partial Regex SentenceBreak();
 
-    [GeneratedRegex(@"(?<!\d):(?!\d)\s*")]
+    [GeneratedRegex(@"(?:(?<!\d):|:(?!\d))\s*")]
     private static partial Regex Colon();
 
     [GeneratedRegex(@",\s*\.")]

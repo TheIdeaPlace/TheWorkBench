@@ -404,7 +404,7 @@ public class SheepheadSessionTests
     {
         var s = Make(4, Rules(4));
         s.Start();
-        Assert.Matches("^Kelly \\(you\\), role [a-z, ]+, tricks 0, points this hand 0, score 0$", s.Scores.RowName(0));
+        Assert.Matches("^Kelly, you, role [a-z, ]+, tricks 0, points this hand 0, score 0$", s.Scores.RowName(0));
         PlayHands(s, 1);
         Assert.Matches("^1, picker [^,]+(, leaster)?, partner [^,]+, result [a-z ]+, Kelly [+-]?[0-9]+", s.History.RowName(0));
     }
