@@ -330,7 +330,7 @@ public sealed partial class AppTests : IDisposable
                     var name = f.Name;
                     _heard.Clear();
                     Send(VirtualKeyShort.ENTER);
-                    WaitToHear(t => t.Contains("cannot be played: ", StringComparison.Ordinal), "the refusal");
+                    WaitToHear(t => t.Contains("cannot be played, ", StringComparison.Ordinal), "the refusal");
                     Assert.Equal(name, Focused().Name);
                     return;
                 }
@@ -351,7 +351,7 @@ public sealed partial class AppTests : IDisposable
         var card = WaitForFocus(e => e.Parent.Name == "Your hand", "a card");
         _heard.Clear();
         Type('h');
-        WaitToHear(t => t.Contains("clubs", StringComparison.OrdinalIgnoreCase) || t.Contains("club:", StringComparison.OrdinalIgnoreCase), "the hand read out");
+        WaitToHear(t => t.Contains("clubs, ", StringComparison.OrdinalIgnoreCase) || t.Contains("club, ", StringComparison.OrdinalIgnoreCase), "the hand read out");
         Assert.Equal(card.Name, Focused().Name);
         _heard.Clear();
         Send(VirtualKeyShort.CONTROL, VirtualKeyShort.F9);
