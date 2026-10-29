@@ -363,15 +363,19 @@ public sealed partial class AppTests : IDisposable
             for (var i = 0; i < 3; i++) { Send(VirtualKeyShort.SPACE); Send(VirtualKeyShort.RIGHT); }
             Send(VirtualKeyShort.TAB);
             WaitForFocus(e => e.Name == "Pass 3 of 3", "the Pass button");
+            _heard.Clear();
             Send(VirtualKeyShort.ENTER);
             for (var trick = 0; trick < 6; trick++)
             {
+                // Wait for the turn to come back, so every Enter really plays a card.
+                WaitToHear(t => t.Contains("Your turn", StringComparison.Ordinal), "the turn");
+                _heard.Clear();
                 WaitForFocus(e => e.Parent?.Name == "Your hand", "the hand");
                 Send(VirtualKeyShort.HOME);
                 for (var i = 0; i < 13 && Focused().Name.Contains("cannot be played", StringComparison.Ordinal); i++)
                     Send(VirtualKeyShort.RIGHT);
+                Assert.DoesNotContain("cannot be played", Focused().Name, StringComparison.Ordinal);
                 Send(VirtualKeyShort.ENTER);
-                Thread.Sleep(500);
             }
             Thread.Sleep(500);
         }

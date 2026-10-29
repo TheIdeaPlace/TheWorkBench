@@ -122,19 +122,22 @@ public partial class GameView : UserControl
         StatusLine.Text = SpokenText.Plain(Session.Status);
         TableNote.Text = SpokenText.Plain(Session.TableNote);
         TableNote.Visibility = Session.TableNote.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+        // A turn that asks for the choices (the bid, Pick up the blind) takes focus to them
+        // before the hand changes, so a new hand never puts focus on a card on the way.
+        var focus = _pendingFocus;
+        _pendingFocus = null;
+        if (!MayMoveFocus) focus = null;
+        if (focus == FocusChoices)
+        {
+            _pendingCard = null;
+            RefreshControls();
+            FocusChoices();
+            focus = null;
+        }
         RefreshHand();
         RefreshSeats();
-        if (_pendingFocus is { } focus)
-        {
-            _pendingFocus = null;
-            _pendingCard = null;
-            if (MayMoveFocus)
-            {
-                // The choices have to exist before focus can go to them.
-                if (focus == FocusChoices) RefreshControls();
-                focus();
-            }
-        }
+        _pendingCard = null;
+        focus?.Invoke();
         RefreshControls();
         RefreshTable(ScoresList, ScoresGrid, Session.Scores, ref _scoreShape, _scores);
         ScoresLabel.Content = "_" + Session.Scores.Title.Replace("_", "__");
@@ -211,34 +214,11 @@ public partial class GameView : UserControl
         // Remove what has gone, insert what is new, keep the rest in place and update it.
         for (var i = _hand.Count - 1; i >= 0; i--)
             if (!keep.Contains(_hand[i].Id)) _hand.RemoveAt(i);
-        var focused = HandList.IsKeyboardFocusWithin && Keyboard.FocusedElement is ListBoxItem { DataContext: HandItem fi } ? fi : null;
-        for (var i = 0; i < cards.Count; i++)
-        {
-            var at = IndexOf(_hand, cards[i].Id);
-            if (at < 0)
-            {
-                _hand.Insert(i, new HandItem(cards[i].Id));
-            }
-            else if (at != i && ReferenceEquals(_hand[at], focused))
-            {
-                // Moving a card takes it out of the panel for a moment, and the focused one would
-                // drop focus to the window (a Euchre hand re-sorted once trump is named). Move the
-                // cards in front of it to the back instead; later passes put them in their places.
-                for (; at > i; at--) _hand.Move(i, _hand.Count - 1);
-            }
-            else if (at != i)
-            {
-                _hand.Move(at, i);
-            }
-            _hand[i].Update(cards[i]);
-        }
-    }
-
-    private static int IndexOf(ObservableCollection<HandItem> items, string id)
-    {
-        for (var i = 0; i < items.Count; i++)
-            if (items[i].Id == id) return i;
-        return -1;
+        // In order without moving the focused card (a Euchre hand re-sorted once trump is named).
+        var focused = HandList.IsKeyboardFocusWithin && Keyboard.FocusedElement is ListBoxItem { DataContext: HandItem fi } ? fi.Id : null;
+        ListOrder.InOrder(cards.Select(c => c.Id).ToList(), () => _hand.Count, i => _hand[i].Id,
+            _hand.Move, (i, id) => _hand.Insert(i, new HandItem(id)), focused);
+        for (var i = 0; i < cards.Count; i++) _hand[i].Update(cards[i]);
     }
 
     private void RefreshSeats()
@@ -271,36 +251,23 @@ public partial class GameView : UserControl
             ControlsPanel.Children.Remove(gone);
             _secondary.Remove(id);
         }
-        for (var i = 0; i < wanted.Count; i++)
+        foreach (var c in wanted)
         {
-            var c = wanted[i];
-            var key = KeyOf(c);
-            if (!_secondary.TryGetValue(key, out var el))
-            {
-                el = Create(c);
-                _secondary[key] = el;
-            }
-            else
-            {
-                Update(el, c);
-            }
-            var at = ControlsPanel.Children.IndexOf(el);
-            if (at > i && el.IsKeyboardFocusWithin)
-            {
-                // As in the hand: the focused control stays put and the ones in front go back.
-                for (; at > i; at--)
-                {
-                    var front = ControlsPanel.Children[i];
-                    ControlsPanel.Children.RemoveAt(i);
-                    ControlsPanel.Children.Add(front);
-                }
-            }
-            else if (at != i)
-            {
-                if (at >= 0) ControlsPanel.Children.RemoveAt(at);
-                ControlsPanel.Children.Insert(Math.Min(i, ControlsPanel.Children.Count), el);
-            }
+            if (_secondary.TryGetValue(KeyOf(c), out var el)) Update(el, c);
+            else _secondary[KeyOf(c)] = Create(c);
         }
+        // As in the hand: in order without moving the focused control.
+        var children = ControlsPanel.Children;
+        var keyOf = _secondary.ToDictionary(p => (UIElement)p.Value, p => p.Key);
+        var focused = _secondary.FirstOrDefault(p => p.Value.IsKeyboardFocusWithin).Key;
+        ListOrder.InOrder(wanted.Select(KeyOf).ToList(), () => children.Count, i => keyOf[children[i]],
+            (from, to) =>
+            {
+                var el = children[from];
+                children.RemoveAt(from);
+                children.Insert(to, el);
+            },
+            (i, key) => children.Insert(i, _secondary[key]), focused);
     }
 
     private static string KeyOf(GameControl c) => c.Kind + ":" + c.Id;
@@ -409,6 +376,7 @@ public partial class GameView : UserControl
         var log = Session.Log;
         if (log.Count < _log.Count)
         {
+            if (LogList.IsKeyboardFocusWithin) LogList.Focus();
             _log.Clear();
         }
         var fresh = log.Count - _log.Count;
