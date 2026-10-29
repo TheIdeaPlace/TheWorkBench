@@ -344,6 +344,45 @@ public sealed partial class AppTests : IDisposable
         throw new Xunit.Sdk.XunitException("no unplayable card came up in a whole hand");
     }
 
+    /// <summary>
+    /// Playing the focused card takes it out of the hand. Focus must go to another card first:
+    /// if it fell to the window even for a moment, JAWS would read the whole window.
+    /// </summary>
+    [Fact]
+    public void Focus_never_falls_to_the_window_while_cards_are_played()
+    {
+        StartGame("Hearts, four players", "Hearts");
+        WaitForFocus(e => e.Parent.Name == "Your hand", "a card");
+        var landed = new ConcurrentQueue<string>();
+        var handler = _automation.RegisterFocusChangedEvent(e =>
+        {
+            try { landed.Enqueue($"{e.ControlType}|{e.Name}"); } catch (COMException) { }
+        });
+        try
+        {
+            for (var i = 0; i < 3; i++) { Send(VirtualKeyShort.SPACE); Send(VirtualKeyShort.RIGHT); }
+            Send(VirtualKeyShort.TAB);
+            WaitForFocus(e => e.Name == "Pass 3 of 3", "the Pass button");
+            Send(VirtualKeyShort.ENTER);
+            for (var trick = 0; trick < 6; trick++)
+            {
+                WaitForFocus(e => e.Parent?.Name == "Your hand", "the hand");
+                Send(VirtualKeyShort.HOME);
+                for (var i = 0; i < 13 && Focused().Name.Contains("cannot be played", StringComparison.Ordinal); i++)
+                    Send(VirtualKeyShort.RIGHT);
+                Send(VirtualKeyShort.ENTER);
+                Thread.Sleep(500);
+            }
+            Thread.Sleep(500);
+        }
+        finally
+        {
+            handler.Dispose();
+        }
+        Assert.DoesNotContain(landed, l => l.StartsWith($"{ControlType.Window}|", StringComparison.Ordinal));
+        Assert.Contains(landed, l => l.StartsWith($"{ControlType.ListItem}|", StringComparison.Ordinal));
+    }
+
     [Fact]
     public void Review_keys_and_the_status_bar_keys_speak_without_moving_focus()
     {
