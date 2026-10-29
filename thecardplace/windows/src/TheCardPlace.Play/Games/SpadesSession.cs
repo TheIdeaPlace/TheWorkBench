@@ -94,7 +94,14 @@ public sealed class SpadesSession : GameSession<SpadesState, SpadesAction>
         }
     }
 
-    public override IReadOnlyList<string> TableLines => [SpadesReview.LastTrick(State)];
+    public override IReadOnlyList<string> TableLines =>
+    [
+        .. TrickLines(State.Trick.Select(t => (t.Seat, t.Card)).ToList(), SpadesCards.Describe,
+            State.Trick.Count > 0 ? SpadesGame.TrickWinner(State.Trick)?.Seat : null),
+        .. State.LastTrick is { } lt
+            ? LastTrickLines(lt.Cards.Select(t => (t.Seat, t.Card)).ToList(), lt.Winner, "", SpadesCards.Describe)
+            : [],
+    ];
 
     public override string TableNote => State.Phase switch
     {

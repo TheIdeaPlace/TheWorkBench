@@ -150,7 +150,12 @@ public sealed class CribbageSession : GameSession<CribbageState, CribbageAction>
     /// <summary>The middle of the table: the crib while it is thrown to, the count and the starter in the play, the hand being counted.</summary>
     public override IReadOnlyList<string> TableLines => State.Phase switch
     {
-        CribbagePhase.Play => [CribbageReview.Play(State, Me), CribbageReview.DealerAndCrib(State, Me)],
+        // The cards in the current count, one line each, then the crib.
+        CribbagePhase.Play =>
+        [
+            .. TrickLines(State.Pile.Skip(State.RunStart).Select(p => (p.Player, p.Card)).ToList(), CribbageCards.Describe, null),
+            CribbageReview.DealerAndCrib(State, Me),
+        ],
         CribbagePhase.Count or CribbagePhase.RoundOver or CribbagePhase.GameOver => [CribbageReview.LastCount(State, Me), CribbageReview.DealerAndCrib(State, Me)],
         _ => [CribbageReview.DealerAndCrib(State, Me)],
     };

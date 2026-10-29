@@ -358,6 +358,36 @@ public abstract class GameSession<TState, TAction> : GameSession
         RequestFocus(first?.Id);
     }
 
+    /// <summary>"You" for the player's own chair, the seat's name otherwise, for the On the table lines.</summary>
+    private string Who(int seat) => seat == Me ? "You" : SeatName(seat);
+
+    /// <summary>
+    /// The cards on the table now, one line each in the order they were played, so the On the
+    /// table list can be arrowed card by card: "Ruth led the Queen of Clubs, trump, 3 points",
+    /// "You played the Ace of Diamonds, winning so far".
+    /// </summary>
+    protected IEnumerable<string> TrickLines(IReadOnlyList<(int Seat, Card Card)> plays, Func<Card, string> describe, int? winning)
+    {
+        for (var i = 0; i < plays.Count; i++)
+        {
+            var (seat, card) = plays[i];
+            var line = $"{Who(seat)} {(i == 0 ? "led" : "played")} the {describe(card)}";
+            if (winning == seat && plays.Count > 1) line += ", winning so far";
+            yield return line;
+        }
+    }
+
+    /// <summary>
+    /// The last completed trick: who took it first, so the first line is the answer, then one
+    /// line per card in the order played.
+    /// </summary>
+    protected IEnumerable<string> LastTrickLines(IReadOnlyList<(int Seat, Card Card)> plays, int winner, string tail, Func<Card, string> describe)
+    {
+        if (plays.Count == 0) yield break;
+        yield return $"Last trick: {Who(winner)} took it{tail}";
+        foreach (var (seat, card) in plays) yield return $"{Who(seat)}, {describe(card)}";
+    }
+
     /// <summary>Position words for a seat seen from the player's chair, in play order.</summary>
     protected string PositionOf(int seat)
     {

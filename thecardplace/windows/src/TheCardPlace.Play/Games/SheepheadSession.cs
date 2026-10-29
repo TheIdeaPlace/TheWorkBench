@@ -140,9 +140,16 @@ public sealed class SheepheadSession : GameSession<SheepheadState, SheepheadActi
         }
     }
 
-    public override IReadOnlyList<string> TableLines => State.Phase == SheepheadPhase.HandOver
-        ? [SheepheadReview.LastTrick(State, Me), SheepheadReview.BlindReveal(State)]
-        : [SheepheadReview.LastTrick(State, Me)];
+    public override IReadOnlyList<string> TableLines =>
+    [
+        .. TrickLines(State.Trick.Select(t => (t.Player, t.Card)).ToList(), SheepheadCards.Describe,
+            State.Trick.Count > 0 ? State.Trick[SheepheadGame.TrickWinnerIndex(State.Trick)].Player : null),
+        .. State.LastTrick is { } lt
+            ? LastTrickLines(lt.Plays.Select(t => (t.Player, t.Card)).ToList(), lt.Winner,
+                lt.Points > 0 ? $" with {Prose.Count(lt.Points, "point")}" : ", no points", SheepheadCards.Describe)
+            : [],
+        .. State.Phase == SheepheadPhase.HandOver ? [SheepheadReview.BlindReveal(State)] : (string[])[],
+    ];
 
     /// <summary>The picker, the partner card or the partner once known, the leaster, the doublers the player knows of.</summary>
     public override string TableNote

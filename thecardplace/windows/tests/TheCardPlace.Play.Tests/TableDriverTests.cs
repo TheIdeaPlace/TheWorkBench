@@ -236,3 +236,56 @@ public class PassSpeechTests
         Assert.Contains("Your turn", all, StringComparison.Ordinal);
     }
 }
+
+/// <summary>The On the table list holds the cards one line each, so it can be arrowed card by card.</summary>
+public class OnTheTableTests
+{
+    [Fact]
+    public void Hearts_lists_each_card_of_the_trick_and_of_the_last_trick()
+    {
+        var (s, _, _, _) = Table.Make<HeartsSession>(GameKind.Hearts, 22);
+        s.Start();
+        foreach (var c in s.Hand.Take(3).ToList()) s.Activate(c);
+        s.Primary.Action();
+        // At Immediate pace the computer players have played up to the player's turn.
+        var trick = s.State.Trick;
+        var lines = s.TableLines;
+        Assert.Equal(trick.Count, lines.Count(l => l.Contains(" led the ", StringComparison.Ordinal) || l.Contains(" played the ", StringComparison.Ordinal)));
+        if (trick.Count > 0) Assert.Equal($"{s.State.Players[trick[0].Seat].Name} led the {trick[0].Card.Name}", lines[0]);
+        if (trick.Count > 1) Assert.Single(lines, l => l.EndsWith(", winning so far", StringComparison.Ordinal));
+
+        // Finish the trick: the last trick is a heading line, then one line per card.
+        var card = s.Hand.First(h => h.Playable);
+        s.Activate(card);
+        lines = s.TableLines;
+        var last = s.State.LastTrick!;
+        var at = lines.ToList().FindIndex(l => l.StartsWith("Last trick: ", StringComparison.Ordinal));
+        Assert.True(at >= 0, string.Join(" | ", lines));
+        Assert.Contains(" took it", lines[at], StringComparison.Ordinal);
+        Assert.Equal(4, lines.Skip(at + 1).Take(4).Count(l => last.Cards.Any(p => l.Contains(p.Card.Name, StringComparison.Ordinal))));
+        Assert.Contains(lines.Skip(at + 1), l => l.StartsWith("You, ", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Sheephead_lists_the_cards_on_the_table()
+    {
+        var (s, _, _, _) = Table.Make<SheepheadSession>(GameKind.Sheephead, 7);
+        s.Start();
+        for (var guard = 0; guard < 200 && s.State.Phase != TheCardPlace.Sheephead.SheepheadPhase.Play; guard++)
+        {
+            var pass = s.Secondary.FirstOrDefault(c => c.Title == "Pass");
+            if (pass is not null) { pass.Action(); continue; }
+            var action = TheCardPlace.Sheephead.SheepheadAI.Decide(s.State, s.Me, new RandomSource(3));
+            if (action is TheCardPlace.Sheephead.SheepheadAction.Bury b)
+            {
+                foreach (var c in b.Cards) s.Activate(Table.CardIn(s, c));
+                s.Primary.Action();
+            }
+            else if (action is TheCardPlace.Sheephead.SheepheadAction.Pick) s.Secondary.First(c => c.Title.StartsWith("Pick", StringComparison.Ordinal)).Action();
+            else break;
+        }
+        Assert.Equal(TheCardPlace.Sheephead.SheepheadPhase.Play, s.State.Phase);
+        var played = s.State.Trick.Count;
+        Assert.Equal(played, s.TableLines.Count(l => l.Contains(" led the ", StringComparison.Ordinal) || l.Contains(" played the ", StringComparison.Ordinal)));
+    }
+}
