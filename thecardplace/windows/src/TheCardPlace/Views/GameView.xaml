@@ -43,7 +43,7 @@
                 <Grid Grid.Row="0" Margin="12,8,12,4">
                     <Label Content="Ta_ble" Target="{Binding ElementName=TableList}" Style="{StaticResource FeltLabel}"
                            HorizontalAlignment="Left" VerticalAlignment="Top" />
-                    <ListBox x:Name="TableList" Style="{StaticResource QuietList}" Background="Transparent" BorderThickness="0"
+                    <v:QuietListBox x:Name="TableList" Style="{StaticResource QuietList}" Background="Transparent" BorderThickness="0"
                              ItemContainerStyle="{StaticResource SeatItem}" AutomationProperties.Name="Table"
                              ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Disabled"
                              PreviewKeyDown="TableList_PreviewKeyDown" GotKeyboardFocus="List_GotKeyboardFocus">
@@ -52,7 +52,7 @@
                                 <v:TablePanel />
                             </ItemsPanelTemplate>
                         </ListBox.ItemsPanel>
-                    </ListBox>
+                    </v:QuietListBox>
                 </Grid>
 
                 <!-- Your hand: one Tab stop. Left and Right move card to card, Home and End to the
@@ -60,7 +60,7 @@
                 <Border Grid.Row="1" Background="{DynamicResource Brush.Rail}" Padding="12,6,12,8">
                     <StackPanel>
                         <Label Content="_Your hand" Target="{Binding ElementName=HandList}" Style="{StaticResource FeltLabel}" />
-                        <ListBox x:Name="HandList" Style="{StaticResource QuietList}" Background="Transparent" BorderThickness="0"
+                        <v:QuietListBox x:Name="HandList" Style="{StaticResource QuietList}" Background="Transparent" BorderThickness="0"
                                  ItemContainerStyle="{StaticResource HandItem}" AutomationProperties.Name="Your hand"
                                  ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Disabled"
                                  PreviewKeyDown="HandList_PreviewKeyDown" GotKeyboardFocus="List_GotKeyboardFocus"
@@ -70,7 +70,7 @@
                                     <v:FanPanel />
                                 </ItemsPanelTemplate>
                             </ListBox.ItemsPanel>
-                        </ListBox>
+                        </v:QuietListBox>
                     </StackPanel>
                 </Border>
 
@@ -90,15 +90,15 @@
             <!-- The numbers and the story so far. -->
             <DockPanel Grid.Column="1" Margin="12,6,12,10">
                 <Label DockPanel.Dock="Top" Content="_On the table" Target="{Binding ElementName=LinesList}" Style="{StaticResource PanelLabel}" />
-                <ListBox x:Name="LinesList" DockPanel.Dock="Top" MaxHeight="150" Style="{StaticResource QuietList}"
-                         ItemContainerStyle="{StaticResource TextItem}" AutomationProperties.Name="On the table"
+                <v:QuietListBox x:Name="LinesList" DockPanel.Dock="Top" MaxHeight="150" Style="{StaticResource QuietList}"
+                         ItemContainerStyle="{StaticResource LineItem}" AutomationProperties.Name="On the table"
                          ScrollViewer.HorizontalScrollBarVisibility="Disabled" GotKeyboardFocus="List_GotKeyboardFocus">
                     <ListBox.ItemTemplate>
                         <DataTemplate>
-                            <TextBlock Text="{Binding}" TextWrapping="Wrap" />
+                            <TextBlock Text="{Binding AccessibleName}" TextWrapping="Wrap" />
                         </DataTemplate>
                     </ListBox.ItemTemplate>
-                </ListBox>
+                </v:QuietListBox>
                 <Label DockPanel.Dock="Top" x:Name="ScoresLabel" Content="_Scores" Target="{Binding ElementName=ScoresList}" Style="{StaticResource PanelLabel}" />
                 <ListView x:Name="ScoresList" DockPanel.Dock="Top" MaxHeight="210" FontSize="14" IsTextSearchEnabled="False"
                           KeyboardNavigation.TabNavigation="Once" AutomationProperties.Name="Scores" GotKeyboardFocus="List_GotKeyboardFocus">
@@ -128,7 +128,7 @@
                 </ListView>
 
                 <Label DockPanel.Dock="Top" Content="Game _log, newest first" Target="{Binding ElementName=LogList}" Style="{StaticResource PanelLabel}" />
-                <ListBox x:Name="LogList" Style="{StaticResource QuietList}" ItemContainerStyle="{StaticResource TextItem}"
+                <v:QuietListBox x:Name="LogList" Style="{StaticResource QuietList}" ItemContainerStyle="{StaticResource TextItem}"
                          AutomationProperties.Name="Game log" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                          GotKeyboardFocus="List_GotKeyboardFocus">
                     <ListBox.ItemTemplate>
@@ -136,7 +136,7 @@
                             <TextBlock Text="{Binding}" TextWrapping="Wrap" />
                         </DataTemplate>
                     </ListBox.ItemTemplate>
-                </ListBox>
+                </v:QuietListBox>
             </DockPanel>
         </Grid>
     </Grid>

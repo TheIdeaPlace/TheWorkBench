@@ -66,11 +66,25 @@ public partial class MainWindow : Window
         _game = null;
         _hub ??= new HubView(this);
         _hub.Refresh();
-        Page.Content = _hub;
         Title = "The Card Place";
-        ApplyZoom();
+        ShowPage(_hub, _hub.FocusGames);
         BuildMenus();
-        Dispatcher.BeginInvoke(() => _hub.FocusGames(), System.Windows.Threading.DispatcherPriority.Input);
+    }
+
+    /// <summary>
+    /// Puts a page on screen with focus already in it. The new page is added and focused while
+    /// the old one is still there, and only then is the old one removed: replacing it first
+    /// would leave focus on the window for a moment, and JAWS reads the whole window.
+    /// </summary>
+    private void ShowPage(FrameworkElement page, Action focus)
+    {
+        if (!Pages.Children.Contains(page)) Pages.Children.Add(page);
+        page.Visibility = Visibility.Visible;
+        ApplyZoom(page);
+        Pages.UpdateLayout();
+        focus();
+        foreach (var old in Pages.Children.OfType<FrameworkElement>().Where(p => !ReferenceEquals(p, page)).ToList())
+            Pages.Children.Remove(old);
     }
 
     public void Play(GameKind kind)
@@ -78,12 +92,11 @@ public partial class MainWindow : Window
         App.Settings.LastGame = kind.Key();
         SettingsStore.Save(App.Settings);
         var session = GameFactory.Create(kind, App.Settings, _announcer, App.Seed is { } seed ? new RandomSource(seed) : null);
-        _game = new GameView(this, session);
-        Page.Content = _game;
+        var game = new GameView(this, session);
+        _game = game;
         Title = $"{kind.Title()} - The Card Place";
-        ApplyZoom();
+        ShowPage(game, game.Begin);
         BuildMenus();
-        _game.Begin();
     }
 
     // ---- menus ----
@@ -248,16 +261,13 @@ public partial class MainWindow : Window
     private void Zoom(double step)
     {
         App.Settings.Zoom = step == 0 ? 1.0 : Math.Clamp(Math.Round(App.Settings.Zoom + step, 1), MinZoom, MaxZoom);
-        ApplyZoom();
+        foreach (var page in Pages.Children.OfType<FrameworkElement>()) ApplyZoom(page);
         SettingsStore.Save(App.Settings);
         _announcer.Say($"Zoom {App.Settings.Zoom * 100:0} percent", AnnouncementCategory.Result);
     }
 
-    private void ApplyZoom()
-    {
-        if (Page.Content is FrameworkElement fe)
-            fe.LayoutTransform = new System.Windows.Media.ScaleTransform(App.Settings.Zoom, App.Settings.Zoom);
-    }
+    private static void ApplyZoom(FrameworkElement page) =>
+        page.LayoutTransform = new System.Windows.Media.ScaleTransform(App.Settings.Zoom, App.Settings.Zoom);
 
     private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
     {

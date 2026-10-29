@@ -201,4 +201,9 @@
         <Setter Property="Padding" Value="6,3" />
         <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing}" />
     </Style>
+
+    <!-- A line of On the table: a row updated in place, named by its text. -->
+    <Style x:Key="LineItem" TargetType="ListBoxItem" BasedOn="{StaticResource TextItem}">
+        <Setter Property="AutomationProperties.Name" Value="{Binding AccessibleName}" />
+    </Style>
 </ResourceDictionary>

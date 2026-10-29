@@ -76,8 +76,26 @@ public sealed class SeatItem(int seat) : Observable
     }
 }
 
-/// <summary>A row of a score table, with its cells for the grid and its spoken name.</summary>
-public sealed record TableRow(IReadOnlyList<string> Cells, string AccessibleName);
+/// <summary>
+/// A row of a score table or a line of On the table: its cells for the grid, and its spoken
+/// name. Updated in place, so the row a screen reader is on is never destroyed and rebuilt.
+/// </summary>
+public sealed class RowItem : Observable
+{
+    private IReadOnlyList<string> _cells = [];
+    private string _name = "";
+
+    public IReadOnlyList<string> Cells { get => _cells; private set => Set(ref _cells, value); }
+    public string AccessibleName { get => _name; private set => Set(ref _name, value); }
+
+    public void Update(IReadOnlyList<string> cells, string name)
+    {
+        if (!Cells.SequenceEqual(cells)) Cells = cells.ToList();
+        AccessibleName = name;
+    }
+
+    public override string ToString() => AccessibleName;
+}
 
 /// <summary>
 /// Lays the seats out around the table: the player at the bottom, and the others on an arc over
