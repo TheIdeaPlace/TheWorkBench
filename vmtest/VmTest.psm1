@@ -249,6 +249,9 @@ function Set-VmTestLock {
     $lock = [ordered]@{ repo = $Task.Repo; branch = $Task.Branch; checkpoint = $Task.Checkpoint; since = (Get-Date).ToString('s'); v = 3 }
     $me = Get-CurrentHolder
     if ($me) { $lock.pid = $me.pid; $lock.started = $me.started; $lock.session = $me.session }
+    # Only a session on another PC (see VMTEST_HOST) is named by computer, so a lock taken here
+    # looks exactly as it always has.
+    if ($me -and $me.computer) { $lock.computer = $me.computer }
     Write-StateFile (Get-LockPath $VMName) ([pscustomobject]$lock)
 }
 
@@ -264,8 +267,15 @@ function Get-ProcessStartTime([int]$Id) {
     if ($p) { try { $p.StartTime.ToString('s') } catch { 'unknown' } }
 }
 
-# The Claude session running this command, or nothing outside Claude Code.
+# The Claude session running this command, or nothing outside Claude Code. A command forwarded from
+# another PC (VMTEST_HOST) comes from a session there; its process ids mean nothing on this PC, so
+# that PC sends who it is in VMTEST_REMOTE_HOLDER, and the holder carries the computer's name.
 function Get-CurrentHolder {
+    if ($env:VMTEST_REMOTE_HOLDER) {
+        $r = ConvertFrom-RemoteJson 'VMTEST_REMOTE_HOLDER'
+        if (-not $r.pid -or -not $r.computer) { return }
+        return [pscustomobject]@{ pid = [int]$r.pid; started = "$($r.started)"; session = "$($r.session)"; computer = "$($r.computer)" }
+    }
     $id = 0
     if (-not [int]::TryParse("$env:CLAUDE_PID", [ref]$id) -or $id -le 0) { return }
     $started = Get-ProcessStartTime $id
@@ -273,25 +283,58 @@ function Get-CurrentHolder {
     [pscustomobject]@{ pid = $id; started = $started; session = "$env:CLAUDE_CODE_SESSION_ID" }
 }
 
+# JSON another PC sent in an environment variable, with a clear message if it's damaged.
+function ConvertFrom-RemoteJson([string]$Name) {
+    $text = [Environment]::GetEnvironmentVariable($Name)
+    if (-not $text) { return }
+    try { $text | ConvertFrom-Json } catch { throw "$Name isn't readable JSON, so vmtest can't tell which session this command comes from." }
+}
+
 # Whether the session holding a lock is still open: $true, $false, or $null when the lock doesn't
 # say (it was taken outside Claude Code, or by an older vmtest).
 function Test-HolderOpen {
     param([Parameter(Mandatory)]$Lock)
     if (-not $Lock.pid -or -not $Lock.started) { return $null }
+    if ($Lock.computer) {
+        # A session on another PC. That PC sends the processes it has open (VMTEST_REMOTE_LIVE)
+        # with each command, so a command from there can tell. From anywhere else there's no way to
+        # check, so it counts as open: never take a VM from a session that may still be using it.
+        # The idle limits still free it in the end.
+        $live = ConvertFrom-RemoteJson 'VMTEST_REMOTE_LIVE'
+        if (-not $live -or "$($live.computer)" -ne "$($Lock.computer)") { return $true }
+        $p = @($live.processes | Where-Object { [int]$_.pid -eq [int]$Lock.pid })[0]
+        return [bool]($p -and ($p.started -eq 'unknown' -or $p.started -eq $Lock.started))
+    }
     $started = Get-ProcessStartTime ([int]$Lock.pid)
     $started -eq 'unknown' -or $started -eq $Lock.started
 }
 
 # Whether this command comes from the session holding the lock. A lock that doesn't say who holds
 # it belongs to anyone running its task, as before. So does every lock, to a command run outside
-# Claude Code: that's the user at their own terminal.
+# Claude Code: that's the user at their own terminal. Sessions on different PCs are never the same,
+# even with the same process id.
 function Test-SameHolder {
     param([Parameter(Mandatory)]$Lock)
     if (-not $Lock.pid) { return $true }
     $me = Get-CurrentHolder
     if (-not $me) { return $true }
-    [bool]($me.pid -eq [int]$Lock.pid -and $me.started -eq $Lock.started)
+    [bool]($me.pid -eq [int]$Lock.pid -and $me.started -eq $Lock.started -and "$($me.computer)" -eq "$($Lock.computer)")
 }
+
+# Whether the lock's session is on another PC, and whether a command from here can check it.
+function Get-HolderPlace {
+    param([Parameter(Mandatory)]$Lock)
+    if (-not $Lock.computer) { return '' }
+    $live = ConvertFrom-RemoteJson 'VMTEST_REMOTE_LIVE'
+    if ($live -and "$($live.computer)" -eq "$($Lock.computer)") { " on $($Lock.computer)" }
+    else { " on $($Lock.computer), which can't be checked from here, so it counts as open" }
+}
+
+# The folder the command was run from: on the PC that forwarded it, when it came from another PC.
+function Get-CallerFolder { if ($env:VMTEST_REMOTE_FOLDER) { $env:VMTEST_REMOTE_FOLDER } else { (Get-Location).Path } }
+
+# How messages name the PC the VMs run on: 'this PC', or its name when the command came from another PC.
+function Get-PCLabel { if ($env:VMTEST_ON_HOST) { $env:COMPUTERNAME } else { 'this PC' } }
 
 # The locks this Claude session holds, under any task.
 function Get-SessionLocks {
@@ -308,7 +351,7 @@ function Assert-NotOtherSession {
     if ((Test-SameHolder $Lock) -or -not (Test-HolderOpen $Lock)) { return }
     $last = Format-Duration ((Get-Date) - (Get-LastActivity $Lock))
     throw (New-BusyError ("'$($Lock.vm)' is held for $($Task.Repo) / $($Task.Branch) by another Claude session that is still open " +
-            "(session $($Lock.session), last used $last ago). Sessions on the same repo and branch are the same task, so they'd share one VM " +
+            "(session $($Lock.session)$(Get-HolderPlace $Lock), last used $last ago). Sessions on the same repo and branch are the same task, so they'd share one VM " +
             "and undo each other's work. Work on another branch or worktree, wait with 'vmtest begin -Wait', or ask the user."))
 }
 
@@ -426,7 +469,7 @@ function Get-NoVMMessage {
     # folder asks about the wrong task; say which VMs this session does hold.
     $elsewhere = @(Get-SessionLocks)
     foreach ($l in $elsewhere) {
-        $lines += "This session holds '$($l.vm)' for $($l.repo) / $($l.branch). vmtest takes the task from the folder it runs in ($((Get-Location).Path)); run it from that repo's folder, or pass -Repo and -Branch."
+        $lines += "This session holds '$($l.vm)' for $($l.repo) / $($l.branch). vmtest takes the task from the folder it runs in ($(Get-CallerFolder)); run it from that repo's folder, or pass -Repo and -Branch."
     }
     $lines += if ($elsewhere) { "Don't run 'vmtest begin' here: that would take a second VM." }
     else { "Run 'vmtest begin' first; it carries on from this task's last save, including one made for it after it sat idle." }
@@ -919,7 +962,7 @@ function New-PoolClone {
     Set-UniqueMacAddress $vm
     Use-TestVM $Name {
         if (-not (Test-RoomToStart (Get-TestVM))) {
-            throw "this PC has $(Format-GB (Get-HostFreeMemoryBytes)) of memory free, not enough to start it and keep $((Get-VmTestConfig).ReserveGB) GB for the PC."
+            throw "$(Get-PCLabel) has $(Format-GB (Get-HostFreeMemoryBytes)) of memory free, not enough to start it and keep $((Get-VmTestConfig).ReserveGB) GB for the PC."
         }
         Start-VM -Name $Name
         Initialize-TestVM -ComputerName (ConvertTo-ComputerName $Name)
@@ -1007,7 +1050,7 @@ function Select-VMForTask {
     $lines = @()
     if ($free) {
         $lines += ("$(($free | ForEach-Object { "'$($_.Name)'" }) -join ' and ') $(if ($free.Count -eq 1) { 'is' } else { 'are' }) free, " +
-            "but this PC has $(Format-GB (Get-HostFreeMemoryBytes)) of memory free and starting one needs " +
+            "but $(Get-PCLabel) has $(Format-GB (Get-HostFreeMemoryBytes)) of memory free and starting one needs " +
             "$(Format-GB ($free[0].MemoryStartup + (Get-VmTestConfig).ReserveGB * 1GB)), its own memory and the PC's reserve.")
     }
     foreach ($v in $held) {
@@ -1060,7 +1103,7 @@ function Start-TaskOnVM {
         $other = @(Get-SessionLocks | Where-Object { $_.checkpoint -ne $Task.Checkpoint })[0]
         if (-not $mine -and $other -and -not $Force) {
             throw ("This session already holds '$($other.vm)' for $($other.repo) / $($other.branch), and this is $($Task.Repo) / $($Task.Branch). " +
-                "vmtest takes the task from the folder it runs in ($((Get-Location).Path)), so run it from that repo's folder. " +
+                "vmtest takes the task from the folder it runs in ($(Get-CallerFolder)), so run it from that repo's folder. " +
                 "To start testing a second task, 'vmtest save' (or 'vmtest end') the first one from its folder first.")
         }
         if ($mine -and $VM -and $mine.Name -ne $VM) {
@@ -1077,7 +1120,7 @@ function Start-TaskOnVM {
             if ($takeOver -and -not $Force -and -not $stale) { Assert-NotOtherSession $held $Task }
             $script:CurrentVM = $mine.Name
             if (-not (Test-RoomToStart $mine)) {
-                throw (New-BusyError "This task has '$($mine.Name)', but this PC has $(Format-GB (Get-HostFreeMemoryBytes)) of memory free, not enough to start it.")
+                throw (New-BusyError "This task has '$($mine.Name)', but $(Get-PCLabel) has $(Format-GB (Get-HostFreeMemoryBytes)) of memory free, not enough to start it.")
             }
             if ($takeOver) {
                 $why = if (-not (Test-HolderOpen $held)) { 'a session that has closed' }
@@ -1298,7 +1341,8 @@ function Invoke-VmTestEnd {
 function Get-VmTestStatus {
     $script:CurrentVM = $null
     $names = @(Get-PoolNames)
-    $lines = @("Test VMs: $($names.Count) in the pool. This PC has $(Format-GB (Get-HostFreeMemoryBytes)) of memory free.")
+    $lines = @(if ($env:VMTEST_ON_HOST) { "Test VMs on ${env:COMPUTERNAME}: $($names.Count) in the pool. $env:COMPUTERNAME has $(Format-GB (Get-HostFreeMemoryBytes)) of memory free." }
+        else { "Test VMs: $($names.Count) in the pool. This PC has $(Format-GB (Get-HostFreeMemoryBytes)) of memory free." })
     $any = $false
     foreach ($name in $names) {
         $vm = Get-VM -Name $name -ErrorAction SilentlyContinue
@@ -1312,7 +1356,9 @@ function Get-VmTestStatus {
         $who = if ($held) {
             $idle = (Get-Date) - (Get-LastActivity $held)
             $open = Test-HolderOpen $held
-            $session = if ($open) { ', by a Claude session that is open' } elseif ($open -eq $false) { ', by a Claude session that has closed' } else { '' }
+            $place = Get-HolderPlace $held
+            $session = if ($place -like '*counts as open') { ", by a Claude session$place" }
+            elseif ($open) { ", by a Claude session$place that is open" } elseif ($open -eq $false) { ", by a Claude session$place that has closed" } else { '' }
             "in use by $($held.repo) / $($held.branch) since $(Format-Since $held.since), last used $(Format-Duration $idle) ago$session" +
                 $(if (Test-LockStale $held) { '; idle long enough that the next begin with no free VM saves it and takes it' } else { '' })
         } else { 'free' }
@@ -1325,7 +1371,270 @@ function Get-VmTestStatus {
     $lines
 }
 
+# ---- test VMs on another PC (VMTEST_HOST) ------------------------------------------------------
+#
+# A PC without Hyper-V (an Arm laptop, say) can use the test VMs of another PC on the network. With
+# VMTEST_HOST set, each command goes to that PC over PowerShell remoting and runs the copy of vmtest
+# kept there, which drives its VMs over PowerShell Direct as usual. The locks, checkpoints and pool
+# are that PC's own, so several PCs share one host safely. VMTEST_ON_HOST marks the copy running
+# there, so it never forwards again.
+
+# Whether this command goes to another PC. Unset, everything runs here exactly as before.
+function Test-ForwardToHost { [bool]($env:VMTEST_HOST -and -not $env:VMTEST_ON_HOST) }
+
+# The host's name, kept plain because it becomes a file name.
+function Assert-HostName([string]$ComputerName) {
+    if ($ComputerName -notmatch '^[A-Za-z0-9][A-Za-z0-9.-]*$') {
+        throw "'$ComputerName' isn't a usable computer name. Use the host's name, such as HOSTNAME, with letters, digits, . and - only."
+    }
+    $ComputerName
+}
+
+# Where vmtest is kept on the host. It's vmtest's own copy: it's replaced whenever this PC's differs.
+function Get-HostToolPath { if ($env:VMTEST_HOST_PATH) { $env:VMTEST_HOST_PATH } else { 'C:\vmtest-tool' } }
+
+# The saved sign-in for a host. Export-Clixml protects the password with DPAPI, so only this
+# Windows account on this PC can read it.
+function Get-HostCredentialPath([string]$ComputerName) {
+    Join-Path (Join-Path $env:LOCALAPPDATA 'vmtest\hosts') "$(Assert-HostName $ComputerName).xml"
+}
+
+function Get-HostCredential([string]$ComputerName) {
+    $path = Get-HostCredentialPath $ComputerName
+    if (-not (Test-Path $path)) {
+        throw ("VMTEST_HOST is '$ComputerName', but there's no saved sign-in for it. Run 'vmtest host $ComputerName' once to save one, " +
+            "or clear VMTEST_HOST to use this PC's own test VMs.")
+    }
+    try { Import-Clixml $path }
+    catch { throw "The saved sign-in for $ComputerName in $path can't be read; it only works for the Windows account that saved it. Run 'vmtest host $ComputerName' again." }
+}
+
+# Every step that reaches the host goes through these three, so the tests can stand in for the host.
+function Invoke-OnHost {
+    param([Parameter(Mandatory)]$Session, [Parameter(Mandatory)][scriptblock]$ScriptBlock, [object[]]$ArgumentList = @())
+    Invoke-Command -Session $Session -ScriptBlock $ScriptBlock -ArgumentList $ArgumentList
+}
+function Copy-ToHost {
+    param([Parameter(Mandatory)]$Session, [Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Destination, [switch]$Recurse)
+    Copy-Item $Path -Destination $Destination -ToSession $Session -Recurse:$Recurse -Force
+}
+function Copy-FromHost {
+    param([Parameter(Mandatory)]$Session, [Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Destination)
+    Copy-Item $Path -Destination $Destination -FromSession $Session -Force
+}
+
+function New-HostSession {
+    param([Parameter(Mandatory)][string]$ComputerName, $Credential)
+    if (-not $Credential) { $Credential = Get-HostCredential $ComputerName }
+    try { $session = New-PSSession -ComputerName $ComputerName -Credential $Credential -ErrorAction Stop }
+    catch { throw "Couldn't connect to $ComputerName over PowerShell remoting: $($_.Exception.Message) 'Using VMs on another PC' in vmtest's README says what it needs." }
+    # vmtest's scripts aren't signed, and a copied file may be marked as from another computer.
+    Invoke-OnHost -Session $session -ScriptBlock { try { Set-ExecutionPolicy -Scope Process Bypass -Force } catch { } }
+    $session
+}
+
+# A fingerprint of the files that make vmtest run: vmtest.ps1, VmTest.psm1 and the guest folder.
+# The same function runs on the host to fingerprint its copy, so it uses nothing else from here.
+function Get-VmTestToolHash {
+    param([Parameter(Mandatory)][string]$Root)
+    if (-not (Test-Path (Join-Path $Root 'vmtest.ps1'))) { return '' }
+    $Root = (Resolve-Path $Root).Path.TrimEnd('\')
+    $files = @(@('vmtest.ps1', 'VmTest.psm1') | ForEach-Object { Join-Path $Root $_ } | Where-Object { Test-Path $_ })
+    if (Test-Path (Join-Path $Root 'guest')) { $files += @(Get-ChildItem (Join-Path $Root 'guest') -Recurse -File -Force | ForEach-Object { $_.FullName }) }
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $parts = foreach ($f in $files) {
+            $f.Substring($Root.Length).ToLowerInvariant() + ' ' + [BitConverter]::ToString($sha.ComputeHash([System.IO.File]::ReadAllBytes($f)))
+        }
+        [BitConverter]::ToString($sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes((@($parts | Sort-Object) -join "`n"))))
+    } finally { $sha.Dispose() }
+}
+
+# Make the host's copy of vmtest the same as this one, so both ends always agree on the lock format
+# and the agent. Returns whether anything was copied.
+function Sync-HostTool {
+    param([Parameter(Mandatory)]$Session, [Parameter(Mandatory)][string]$Path)
+    $mine = Get-VmTestToolHash $PSScriptRoot
+    $theirs = Invoke-OnHost -Session $Session -ScriptBlock ${function:Get-VmTestToolHash} -ArgumentList $Path
+    if ($mine -eq $theirs) { return $false }
+    Invoke-OnHost -Session $Session -ArgumentList $Path -ScriptBlock {
+        param($p)
+        New-Item $p -ItemType Directory -Force | Out-Null
+        # A file the agent no longer has shouldn't linger there.
+        $g = Join-Path $p 'guest'
+        if (Test-Path $g) { Remove-Item $g -Recurse -Force }
+    }
+    foreach ($f in @('vmtest.ps1', 'VmTest.psm1')) { Copy-ToHost $Session (Join-Path $PSScriptRoot $f) $Path }
+    Copy-ToHost $Session (Join-Path $PSScriptRoot 'guest') $Path -Recurse
+    Invoke-OnHost -Session $Session -ArgumentList $Path -ScriptBlock { param($p) Get-ChildItem $p -Recurse -File | Unblock-File }
+    $true
+}
+
+# How a command's parameters change on the way to the host. Files named on this PC (deploy's
+# folder or file, push's file, run's -ScriptFile) are copied to a staging folder there first, and
+# the command gets the copy; shot's picture is saved there, then copied back. Switches go as plain
+# true or false, which survive the trip.
+function Get-ForwardPlan {
+    param([Parameter(Mandatory)][string]$Command, [Parameter(Mandatory)][hashtable]$Parameters, [Parameter(Mandatory)][string]$Stage)
+    $p = @{}
+    foreach ($k in $Parameters.Keys) {
+        $v = $Parameters[$k]
+        $p[$k] = if ($v -is [System.Management.Automation.SwitchParameter]) { $v.IsPresent } else { $v }
+    }
+    $p.Command = $Command
+    $uploads = @()
+    $download = $null
+    $local = { param($path) $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($path) }
+    $stageFor = { param($path) "$Stage\$(Split-Path $path -Leaf)" }
+    switch ($Command) {
+        'deploy' {
+            if ($p.Target) {
+                $source = (Resolve-Path $p.Target).Path
+                $uploads += [pscustomobject]@{ Local = $source; Remote = (& $stageFor $source); Folder = (Test-Path $source -PathType Container) }
+                $p.Target = & $stageFor $source
+            }
+        }
+        'push' {
+            if ($p.Target) {
+                $source = (Resolve-Path $p.Target).Path
+                if (-not (Test-Path $source -PathType Leaf)) { throw "'$($p.Target)' isn't a file. Use 'vmtest deploy' for a folder." }
+                $uploads += [pscustomobject]@{ Local = $source; Remote = (& $stageFor $source); Folder = $false }
+                $p.Target = & $stageFor $source
+            }
+        }
+        'run' {
+            if ($p.ScriptFile) {
+                $source = (Resolve-Path $p.ScriptFile).Path
+                $uploads += [pscustomobject]@{ Local = $source; Remote = (& $stageFor $source); Folder = $false }
+                $p.ScriptFile = & $stageFor $source
+            }
+        }
+        'shot' {
+            if ($p.Target) {
+                $out = & $local $p.Target
+                $download = [pscustomobject]@{ Remote = (& $stageFor $out); Local = $out }
+                $p.Target = & $stageFor $out
+            }
+        }
+    }
+    [pscustomobject]@{ Parameters = $p; Uploads = $uploads; Download = $download }
+}
+
+# The Claude processes open on this PC, so the host can tell which of this PC's sessions holding
+# its VMs are still open. They're the processes with the name of the one running this command.
+function Get-LiveSessions {
+    $name = 'claude'
+    $id = 0
+    if ([int]::TryParse("$env:CLAUDE_PID", [ref]$id) -and $id -gt 0) {
+        $p = Get-Process -Id $id -ErrorAction SilentlyContinue
+        if ($p) { $name = $p.ProcessName }
+    }
+    $processes = @(Get-Process -Name $name -ErrorAction SilentlyContinue | ForEach-Object {
+            [pscustomobject]@{ pid = $_.Id; started = $(try { $_.StartTime.ToString('s') } catch { 'unknown' }) } })
+    [pscustomobject]@{ computer = $env:COMPUTERNAME; processes = $processes }
+}
+
+# What the host's vmtest needs to know about this end: that it's on the host, who is asking, which
+# of this PC's sessions are open, and the folder the command was run from (for messages).
+function Get-ForwardEnvironment {
+    $e = @{ VMTEST_ON_HOST = '1'; VMTEST_REMOTE_FOLDER = (Get-Location).Path }
+    $me = Get-CurrentHolder
+    if ($me) {
+        $e.VMTEST_REMOTE_HOLDER = [pscustomobject]@{ pid = $me.pid; started = $me.started; session = $me.session; computer = $env:COMPUTERNAME } | ConvertTo-Json -Compress
+    }
+    $e.VMTEST_REMOTE_LIVE = Get-LiveSessions | ConvertTo-Json -Compress -Depth 4
+    $e
+}
+
+# Run the host's vmtest.ps1 in the session, as this PC would have run its own. What it writes with
+# Write-Host (errors, waiting) shows here as it happens; its output and exit code come back.
+function Invoke-HostVmTest {
+    param([Parameter(Mandatory)]$Session, [Parameter(Mandatory)][string]$ToolPath, [Parameter(Mandatory)][hashtable]$Parameters,
+        [Parameter(Mandatory)][hashtable]$Environment)
+    Invoke-OnHost -Session $Session -ArgumentList $ToolPath, $Parameters, $Environment -ScriptBlock {
+        param($tool, $params, $environment)
+        foreach ($k in $environment.Keys) { Set-Item "Env:\$k" $environment[$k] }
+        $global:LASTEXITCODE = 0
+        $out = & (Join-Path $tool 'vmtest.ps1') @params
+        @{ out = @($out | ForEach-Object { "$_" }); code = $LASTEXITCODE }
+    }
+}
+
+# Run a command on the host named by VMTEST_HOST, with the same parameters, and return its output
+# and exit code. The task (repo and branch) comes from the folder here, since the host can't see it.
+function Invoke-VmTestOnHost {
+    param([Parameter(Mandatory)][string]$Command, [Parameter(Mandatory)][hashtable]$Parameters)
+    $computer = Assert-HostName $env:VMTEST_HOST
+    $params = @{} + $Parameters
+    $task = $null
+    try { $task = Resolve-Task -Repo $params.Repo -Branch $params.Branch } catch { }
+    if ($task) { $params.Repo = $task.Repo; $params.Branch = $task.Branch }
+    $session = New-HostSession -ComputerName $computer
+    try {
+        $tool = Get-HostToolPath
+        Sync-HostTool -Session $session -Path $tool | Out-Null
+        $stage = Invoke-OnHost -Session $session -ScriptBlock { Join-Path $env:TEMP "vmtest-stage\$([guid]::NewGuid())" }
+        $plan = Get-ForwardPlan -Command $Command -Parameters $params -Stage $stage
+        try {
+            if ($plan.Uploads -or $plan.Download) {
+                Invoke-OnHost -Session $session -ArgumentList $stage -ScriptBlock { param($s) New-Item $s -ItemType Directory -Force | Out-Null }
+            }
+            foreach ($u in $plan.Uploads) {
+                if ($u.Folder) {
+                    Invoke-OnHost -Session $session -ArgumentList $u.Remote -ScriptBlock { param($d) New-Item $d -ItemType Directory -Force | Out-Null }
+                    # Each item, hidden ones included, as deploy does into the VM.
+                    Get-ChildItem $u.Local -Force | ForEach-Object { Copy-ToHost $session $_.FullName $u.Remote -Recurse }
+                } else {
+                    Copy-ToHost $session $u.Local $u.Remote
+                }
+            }
+            $r = Invoke-HostVmTest -Session $session -ToolPath $tool -Parameters $plan.Parameters -Environment (Get-ForwardEnvironment)
+            $code = [int]$r.code
+            $out = @($r.out)
+            if ($plan.Download -and $code -eq 0) {
+                Copy-FromHost $session $plan.Download.Remote $plan.Download.Local
+                $out = @($out | ForEach-Object { "$_".Replace($plan.Download.Remote, $plan.Download.Local) })
+            }
+        } finally {
+            try { Invoke-OnHost -Session $session -ArgumentList $stage -ScriptBlock { param($s) if (Test-Path $s) { Remove-Item $s -Recurse -Force } } } catch { }
+        }
+    } finally { Remove-PSSession $session }
+    [pscustomobject]@{ Output = $out; ExitCode = $code }
+}
+
+# 'vmtest host': check that a PC can host the test VMs for this one, save the sign-in for it, and
+# put vmtest there. Nothing changes here until VMTEST_HOST is set.
+function Install-VmTestHost {
+    param([Parameter(Mandatory)][string]$ComputerName, [Parameter(Mandatory)][pscredential]$Credential)
+    $path = Get-HostCredentialPath $ComputerName
+    try { Test-WSMan -ComputerName $ComputerName -ErrorAction Stop | Out-Null }
+    catch {
+        throw ("$ComputerName doesn't answer PowerShell remoting: $($_.Exception.Message) On $ComputerName, run 'Enable-PSRemoting -Force' " +
+            "from an administrator PowerShell, and check that its network is Private. See 'Using VMs on another PC' in vmtest's README.")
+    }
+    $session = New-HostSession -ComputerName $ComputerName -Credential $Credential
+    try {
+        $hv = Invoke-OnHost -Session $session -ScriptBlock {
+            if (-not (Get-Command Get-VM -ErrorAction SilentlyContinue)) { return @{ ok = $false; why = "Hyper-V isn't turned on there." } }
+            try { @{ ok = $true; vms = @(Get-VM -ErrorAction Stop | ForEach-Object { $_.Name }) } }
+            catch { @{ ok = $false; why = "That account can't manage Hyper-V there: $($_.Exception.Message) Add it to the Hyper-V Administrators group on that PC, then try again." } }
+        }
+        if (-not $hv.ok) { throw "Connected to $ComputerName as $($Credential.UserName), but $($hv.why)" }
+        New-Item (Split-Path $path) -ItemType Directory -Force | Out-Null
+        $Credential | Export-Clixml $path
+        $tool = Get-HostToolPath
+        $copied = Sync-HostTool -Session $session -Path $tool
+    } finally { Remove-PSSession $session }
+    $vms = @($hv.vms)
+    "Connected to $ComputerName as $($Credential.UserName), which can manage Hyper-V there."
+    "Saved the sign-in to $path. Only your Windows account on this PC can read it."
+    if ($copied) { "Copied vmtest to $tool on $ComputerName." } else { "vmtest on $ComputerName ($tool) is already the same as this one." }
+    if ($vms) { "Its VMs: $($vms -join ', ')." } else { "It has no VMs yet. Build one named ClaudeTesting there, then run 'vmtest prepare' from here once VMTEST_HOST is set." }
+    "To use its test VMs from this PC, run: setx VMTEST_HOST $ComputerName"
+    "Then restart Claude Code. To go back to this PC's own VMs, run: reg delete HKCU\Environment /v VMTEST_HOST /f"
+}
+
 Export-ModuleMember -Function Get-VmTestConfig, Get-PoolNames, ConvertTo-TaskCheckpointName, Resolve-Task, Get-VmTestLock,
     Set-VmTestLock, Clear-VmTestLock, Assert-LockedBy, Assert-TaskHasVM, Find-TaskVM, Invoke-GuestAgent, Invoke-VmTestPrepare,
     Invoke-VmTestBegin, Invoke-VmTestDeploy, Invoke-VmTestPush, Invoke-VmTestRun, Invoke-VmTestShot, Select-VMToLookAt,
-    Invoke-VmTestSave, Invoke-VmTestEnd, Get-VmTestStatus
+    Invoke-VmTestSave, Invoke-VmTestEnd, Get-VmTestStatus, Test-ForwardToHost, Invoke-VmTestOnHost, Install-VmTestHost

@@ -30,6 +30,12 @@ every command works on the test VM your task holds.
 powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$env:VMTEST_HOME\vmtest.ps1" <command> [args]
 ```
 
+**The VMs may be on another PC.** When `VMTEST_HOST` is set, vmtest runs every command on that
+PC's test VMs over the network. Nothing changes for you: the commands, paths on this PC, output and
+exit codes are the same, and files and pictures are copied across for you. Messages may name that
+PC instead of "this PC". If one says there's no saved sign-in for it, ask the user to run
+`vmtest host <name>` in their own PowerShell window.
+
 **Run every command from that same folder.** Between commands, the shell can go back to the
 folder the session started in, and vmtest run from another repo or branch is a different task: it
 holds no VM, or takes a second one. So `cd` into the repo in the same command as vmtest every time

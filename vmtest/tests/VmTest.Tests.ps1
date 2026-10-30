@@ -7,6 +7,9 @@ $env:VMTEST_POOL = '1'
 # Run as if outside Claude Code, so locks don't name the session running the tests. The
 # 'Claude sessions' tests set these themselves.
 Remove-Item Env:\CLAUDE_PID, Env:\CLAUDE_CODE_SESSION_ID -ErrorAction SilentlyContinue
+# And as if on this PC, even where VMTEST_HOST is set. 'another PC' sets these itself.
+Remove-Item Env:\VMTEST_HOST, Env:\VMTEST_ON_HOST, Env:\VMTEST_REMOTE_HOLDER, Env:\VMTEST_REMOTE_LIVE, Env:\VMTEST_REMOTE_FOLDER,
+    Env:\VMTEST_HOST_PATH -ErrorAction SilentlyContinue
 $second = "$env:VMTEST_VM-2"
 Import-Module (Join-Path $root 'VmTest.psm1') -Force
 
@@ -941,6 +944,307 @@ Describe 'reading who is signed in' {
     It 'sees nobody' {
         (InModuleScope VmTest { Get-SignInState -QuserLines @('No User exists for *') -UserName vmuser }).State | Should Be 'none'
     }
+}
+
+Describe 'another PC (VMTEST_HOST)' {
+    # No real host: a remote session is faked by running its script blocks here, and copies to and
+    # from it are plain copies. The host's vmtest.ps1 itself is replaced by a recorder.
+    $env:VMTEST_STATE = Join-Path $TestDrive 'remote'
+    $env:VMTEST_HOST_PATH = Join-Path $TestDrive 'host-tool'
+    $first = $env:VMTEST_VM
+    $mine = Resolve-Task -Repo 'Mine' -Branch 'x'
+    $work = Join-Path $TestDrive 'work'
+    New-Item -ItemType Directory (Join-Path $work 'build\sub') -Force | Out-Null
+    Set-Content (Join-Path $work 'build\app.exe') 'app'
+    Set-Content (Join-Path $work 'build\sub\data.txt') 'data'
+    New-Item -ItemType File (Join-Path $work 'build\.hidden') -Force | Out-Null
+    (Get-Item (Join-Path $work 'build\.hidden') -Force).Attributes = 'Hidden'
+    Set-Content (Join-Path $work 'notes.txt') 'notes'
+    Set-Content (Join-Path $work 'setup.ps1') 'exit 3'
+
+    function Use-FakeHost([string[]]$Out = @('done'), [int]$Code = 0) {
+        $global:HostRuns = New-Object System.Collections.Generic.List[object]
+        $global:HostAnswer = @{ out = $Out; code = $Code }
+        # A real credential: a plain string would make New-PSSession ask for a password.
+        Mock -ModuleName VmTest Get-HostCredential { New-Object System.Management.Automation.PSCredential('user', (New-Object System.Security.SecureString)) }
+        Mock -ModuleName VmTest New-PSSession { 'host-session' }
+        Mock -ModuleName VmTest Remove-PSSession {}
+        Mock -ModuleName VmTest Invoke-OnHost { $a = @($ArgumentList); & $ScriptBlock @a }
+        Mock -ModuleName VmTest Copy-ToHost { Copy-Item -Path $Path -Destination $Destination -Recurse:$Recurse -Force }
+        Mock -ModuleName VmTest Copy-FromHost { Copy-Item -Path $Path -Destination $Destination -Force }
+        Mock -ModuleName VmTest Invoke-HostVmTest {
+            # What the host would see: its parameters, its environment, and the staged files.
+            $staged = @{}
+            foreach ($k in 'Target', 'ScriptFile') {
+                $v = $Parameters[$k]
+                if ($v -and (Test-Path $v)) { $staged[$k] = @(Get-ChildItem $v -Recurse -Force -File | ForEach-Object { $_.Name }) }
+            }
+            $global:HostRuns.Add([pscustomobject]@{ Parameters = $Parameters; Environment = $Environment; Staged = $staged })
+            if ($Parameters.Command -eq 'shot') {
+                Set-Content $Parameters.Target 'png'
+                return @{ out = @("Saved the VM's screen (1920x1080) to $($Parameters.Target)"); code = 0 }
+            }
+            $global:HostAnswer
+        }
+    }
+
+    It 'is off unless VMTEST_HOST is set, and never forwards from the host itself' {
+        Test-ForwardToHost | Should Be $false
+        $env:VMTEST_HOST = 'HOSTNAME'
+        try {
+            Test-ForwardToHost | Should Be $true
+            $env:VMTEST_ON_HOST = '1'
+            Test-ForwardToHost | Should Be $false
+        } finally { Remove-Item Env:\VMTEST_HOST, Env:\VMTEST_ON_HOST -ErrorAction SilentlyContinue }
+    }
+    It 'refuses a host name that could reach outside its folder' {
+        { InModuleScope VmTest { Get-HostCredentialPath '..\x' } } | Should Throw "isn't a usable computer name"
+    }
+    It 'says how to save a sign-in when there is none' {
+        $before = $env:LOCALAPPDATA
+        $env:LOCALAPPDATA = Join-Path $TestDrive 'appdata'
+        try { { InModuleScope VmTest { Get-HostCredential 'HOSTNAME' } } | Should Throw "Run 'vmtest host HOSTNAME' once" }
+        finally { $env:LOCALAPPDATA = $before }
+    }
+    Context 'what goes to the host' {
+        Push-Location $work
+        try {
+            $plan = { param($c, $p) $global:PlanArgs = @($c, $p); InModuleScope VmTest { Get-ForwardPlan -Command $global:PlanArgs[0] -Parameters $global:PlanArgs[1] -Stage 'C:\stage\1' } }
+            It 'deploy copies the folder to the staging folder and names that' {
+                $r = & $plan 'deploy' @{ Target = 'build'; Name = 'App' }
+                $r.Parameters.Target | Should Be 'C:\stage\1\build'
+                $r.Parameters.Name | Should Be 'App'
+                $r.Uploads[0].Local | Should Be (Join-Path $work 'build')
+                $r.Uploads[0].Folder | Should Be $true
+            }
+            It 'deploy of one file copies that file' {
+                $r = & $plan 'deploy' @{ Target = 'notes.txt' }
+                $r.Parameters.Target | Should Be 'C:\stage\1\notes.txt'
+                $r.Uploads[0].Folder | Should Be $false
+            }
+            It 'push copies the file and keeps -Destination, a folder in the VM' {
+                $r = & $plan 'push' @{ Target = '.\notes.txt'; Destination = 'C:\inside' }
+                $r.Parameters.Target | Should Be 'C:\stage\1\notes.txt'
+                $r.Parameters.Destination | Should Be 'C:\inside'
+                @($r.Uploads).Count | Should Be 1
+            }
+            It 'push refuses a folder, as it does here' {
+                { & $plan 'push' @{ Target = 'build' } } | Should Throw "isn't a file"
+            }
+            It 'run -ScriptFile copies the script; a command line goes as it is' {
+                $r = & $plan 'run' @{ ScriptFile = 'setup.ps1'; Timeout = 90; Elevated = [switch]$true }
+                $r.Parameters.ScriptFile | Should Be 'C:\stage\1\setup.ps1'
+                $r.Parameters.Timeout | Should Be 90
+                $r.Parameters.Elevated | Should Be $true
+                $r.Parameters.Elevated.GetType().Name | Should Be 'Boolean'
+                $r = & $plan 'run' @{ Target = 'type C:\x\notes.txt' }
+                $r.Parameters.Target | Should Be 'type C:\x\notes.txt'
+                @($r.Uploads).Count | Should Be 0
+            }
+            It 'shot is saved on the host and copied back to the path given here' {
+                $r = & $plan 'shot' @{ Target = 'pics\out.png'; FromHost = [switch]$true; VM = 'B' }
+                $r.Parameters.Target | Should Be 'C:\stage\1\out.png'
+                $r.Download.Local | Should Be (Join-Path $work 'pics\out.png')
+                $r.Parameters.FromHost | Should Be $true
+                $r.Parameters.VM | Should Be 'B'
+            }
+            It 'other commands go unchanged, with the command named' {
+                $r = & $plan 'keys' @{ Target = '{TAB}'; Window = 'Notepad' }
+                $r.Parameters.Command | Should Be 'keys'
+                $r.Parameters.Target | Should Be '{TAB}'
+                $r.Parameters.Window | Should Be 'Notepad'
+                @($r.Uploads).Count | Should Be 0
+                $r.Download | Should BeNullOrEmpty
+            }
+        } finally { Pop-Location }
+    }
+    Context 'running a command there' {
+        Push-Location $work
+        $env:VMTEST_HOST = 'HOSTNAME'
+        try {
+            It 'copies vmtest to the host, then only when it differs' {
+                Use-FakeHost
+                Invoke-VmTestOnHost -Command 'status' -Parameters @{} | Out-Null
+                Test-Path (Join-Path $env:VMTEST_HOST_PATH 'vmtest.ps1') | Should Be $true
+                Test-Path (Join-Path $env:VMTEST_HOST_PATH 'guest\agent.ps1') | Should Be $true
+                Assert-MockCalled -ModuleName VmTest Copy-ToHost -Times 3 -Exactly -Scope It
+                Invoke-VmTestOnHost -Command 'status' -Parameters @{} | Out-Null
+                Assert-MockCalled -ModuleName VmTest Copy-ToHost -Times 3 -Exactly -Scope It
+                Add-Content (Join-Path $env:VMTEST_HOST_PATH 'guest\agent.ps1') '# changed there'
+                Invoke-VmTestOnHost -Command 'status' -Parameters @{} | Out-Null
+                Assert-MockCalled -ModuleName VmTest Copy-ToHost -Times 6 -Exactly -Scope It
+                Get-Content (Join-Path $env:VMTEST_HOST_PATH 'guest\agent.ps1') -Raw | Should Not Match 'changed there'
+            }
+            It 'passes the output and exit code back, and names the task from the folder here' {
+                Use-FakeHost -Out @('line one', 'Exit code 5') -Code 5
+                $branch = git -C $root branch --show-current
+                if (-not $branch) { Set-TestInconclusive 'detached HEAD (as in CI)'; return }
+                Push-Location $root
+                try { $r = Invoke-VmTestOnHost -Command 'run' -Parameters @{ Command = 'run'; Target = 'exit 5' } } finally { Pop-Location }
+                $r.Output -join '|' | Should Be 'line one|Exit code 5'
+                $r.ExitCode | Should Be 5
+                $p = $global:HostRuns[0].Parameters
+                $p.Repo | Should Be 'TheWorkBench'
+                $p.Branch | Should Be $branch
+                $p.Target | Should Be 'exit 5'
+            }
+            It 'keeps -Repo and -Branch when they are given' {
+                Use-FakeHost
+                Invoke-VmTestOnHost -Command 'begin' -Parameters @{ Repo = 'Mine'; Branch = 'x' } | Out-Null
+                $global:HostRuns[0].Parameters.Repo | Should Be 'Mine'
+                $global:HostRuns[0].Parameters.Branch | Should Be 'x'
+            }
+            It 'deploy stages every file, hidden ones too, and removes the staging folder after' {
+                Use-FakeHost
+                Invoke-VmTestOnHost -Command 'deploy' -Parameters @{ Target = 'build' } | Out-Null
+                $run = $global:HostRuns[0]
+                ($run.Staged.Target | Sort-Object) -join ',' | Should Be '.hidden,app.exe,data.txt'
+                Split-Path $run.Parameters.Target -Leaf | Should Be 'build'
+                Test-Path (Split-Path $run.Parameters.Target) | Should Be $false
+            }
+            It 'push and run -ScriptFile stage their file' {
+                Use-FakeHost
+                Invoke-VmTestOnHost -Command 'push' -Parameters @{ Target = 'notes.txt' } | Out-Null
+                $global:HostRuns[0].Staged.Target | Should Be 'notes.txt'
+                Invoke-VmTestOnHost -Command 'run' -Parameters @{ ScriptFile = 'setup.ps1' } | Out-Null
+                $global:HostRuns[1].Staged.ScriptFile | Should Be 'setup.ps1'
+                Test-Path $global:HostRuns[1].Parameters.ScriptFile | Should Be $false
+            }
+            It 'shot copies the picture back and names the path here' {
+                Use-FakeHost
+                $out = Join-Path $work 'shot.png'
+                $r = Invoke-VmTestOnHost -Command 'shot' -Parameters @{ Target = 'shot.png' }
+                Get-Content $out | Should Be 'png'
+                $r.Output | Should Be "Saved the VM's screen (1920x1080) to $out"
+            }
+            It 'shot that fails copies nothing back' {
+                Use-FakeHost -Out @() -Code 1
+                Mock -ModuleName VmTest Invoke-HostVmTest { @{ out = @(); code = 1 } }
+                (Invoke-VmTestOnHost -Command 'shot' -Parameters @{ Target = 'none.png' }).ExitCode | Should Be 1
+                Test-Path (Join-Path $work 'none.png') | Should Be $false
+            }
+            It 'tells the host it is the host, and who is asking' {
+                Use-FakeHost
+                $global:FakeProcs = @{ '41' = '2026-10-22T09:00:00' }
+                Mock -ModuleName VmTest Get-ProcessStartTime { $global:FakeProcs["$Id"] }
+                $env:CLAUDE_PID = '41'; $env:CLAUDE_CODE_SESSION_ID = 'session-41'
+                try { Invoke-VmTestOnHost -Command 'windows' -Parameters @{} | Out-Null }
+                finally { Remove-Item Env:\CLAUDE_PID, Env:\CLAUDE_CODE_SESSION_ID }
+                $e = $global:HostRuns[0].Environment
+                $e.VMTEST_ON_HOST | Should Be '1'
+                $e.VMTEST_REMOTE_FOLDER | Should Be $work
+                $holder = $e.VMTEST_REMOTE_HOLDER | ConvertFrom-Json
+                $holder.pid | Should Be 41
+                $holder.started | Should Be '2026-10-22T09:00:00'
+                $holder.session | Should Be 'session-41'
+                $holder.computer | Should Be $env:COMPUTERNAME
+                ($e.VMTEST_REMOTE_LIVE | ConvertFrom-Json).computer | Should Be $env:COMPUTERNAME
+            }
+            It 'outside Claude Code it sends no holder' {
+                Use-FakeHost
+                Invoke-VmTestOnHost -Command 'windows' -Parameters @{} | Out-Null
+                $global:HostRuns[0].Environment.ContainsKey('VMTEST_REMOTE_HOLDER') | Should Be $false
+            }
+        } finally {
+            Remove-Item Env:\VMTEST_HOST
+            Pop-Location
+        }
+    }
+    Context 'sessions on other PCs' {
+        $global:FakeProcs = @{ '1' = '2026-10-22T09:00:00' }
+        Mock -ModuleName VmTest Get-ProcessStartTime { $global:FakeProcs["$Id"] }
+        function Use-Remote([int]$Id, [string]$Computer = 'PC-A', [string]$Started = '2026-10-22T09:00:00') {
+            $env:VMTEST_ON_HOST = '1'
+            $env:VMTEST_REMOTE_HOLDER = @{ pid = $Id; started = $Started; session = "session-$Id"; computer = $Computer } | ConvertTo-Json -Compress
+        }
+        function Set-Live([string]$Computer, [hashtable]$Procs) {
+            $env:VMTEST_REMOTE_LIVE = [pscustomobject]@{ computer = $Computer; processes = @($Procs.Keys | ForEach-Object { @{ pid = [int]$_; started = $Procs[$_] } }) } | ConvertTo-Json -Compress -Depth 4
+        }
+        function Clear-Remote { Remove-Item Env:\VMTEST_ON_HOST, Env:\VMTEST_REMOTE_HOLDER, Env:\VMTEST_REMOTE_LIVE, Env:\CLAUDE_PID, Env:\CLAUDE_CODE_SESSION_ID -ErrorAction SilentlyContinue }
+        function Open-State { InModuleScope VmTest { Test-HolderOpen (Get-VmTestLock $env:VMTEST_VM) } }
+        try {
+            It 'a lock taken from another PC names that PC' {
+                Clear-Remote; Clear-VmTestLock
+                Use-Remote 7
+                Set-VmTestLock -Task $mine -Force
+                $l = Get-VmTestLock
+                $l.pid | Should Be 7
+                $l.computer | Should Be 'PC-A'
+                $l.session | Should Be 'session-7'
+            }
+            It 'a lock taken here has no computer in it, as before' {
+                Clear-Remote; Clear-VmTestLock
+                $env:CLAUDE_PID = '1'; $env:CLAUDE_CODE_SESSION_ID = 'session-1'
+                Set-VmTestLock -Task $mine -Force
+                $p = InModuleScope VmTest { Get-LockPath }
+                (Get-Content $p -Raw | ConvertFrom-Json).PSObject.Properties.Name -join ',' | Should Be 'repo,branch,checkpoint,since,v,pid,started,session'
+                Open-State | Should Be $true
+            }
+            It "a session on the asking PC is open while that PC lists it, and closed once it doesn't" {
+                Clear-Remote; Clear-VmTestLock
+                Use-Remote 7; Set-VmTestLock -Task $mine -Force
+                Set-Live 'PC-A' @{ '7' = '2026-10-22T09:00:00' }
+                Open-State | Should Be $true
+                Set-Live 'PC-A' @{ '8' = '2026-10-22T09:00:00' }
+                Open-State | Should Be $false
+                Set-Live 'PC-A' @{ '7' = '2026-10-22T12:00:00' }
+                Open-State | Should Be $false
+                Set-Live 'PC-A' @{ '7' = 'unknown' }
+                Open-State | Should Be $true
+            }
+            It "a session on a PC that isn't asking counts as open, and status says why" {
+                Clear-Remote; Clear-VmTestLock
+                Use-FakeHyperV
+                Use-Remote 7; Set-VmTestLock -Task $mine -Force
+                Set-Live 'PC-B' @{ '7' = '2026-10-22T09:00:00' }
+                Open-State | Should Be $true
+                Remove-Item Env:\VMTEST_REMOTE_LIVE
+                Open-State | Should Be $true
+                Clear-Remote
+                Open-State | Should Be $true
+                (Get-VmTestStatus) -join "`n" | Should Match "by a Claude session on PC-A, which can't be checked from here, so it counts as open\."
+            }
+            It 'a session on another PC with the same process id is another session' {
+                Clear-Remote; Clear-VmTestLock
+                Use-FakeHyperV
+                Use-Remote 1; Set-VmTestLock -Task $mine -Force
+                Clear-Remote
+                $env:CLAUDE_PID = '1'; $env:CLAUDE_CODE_SESSION_ID = 'session-1'
+                InModuleScope VmTest { Test-SameHolder (Get-VmTestLock $env:VMTEST_VM) } | Should Be $false
+                { Assert-TaskHasVM -Repo 'Mine' -Branch 'x' } | Should Throw 'another Claude session that is still open (session session-1 on PC-A'
+                Use-Remote 1 -Computer 'PC-B'
+                InModuleScope VmTest { Test-SameHolder (Get-VmTestLock $env:VMTEST_VM) } | Should Be $false
+                Use-Remote 1
+                InModuleScope VmTest { Test-SameHolder (Get-VmTestLock $env:VMTEST_VM) } | Should Be $true
+                { Assert-TaskHasVM -Repo 'Mine' -Branch 'x' } | Should Not Throw
+            }
+            It "another session on the same PC can take over once that PC says the holder closed" {
+                Clear-Remote; Clear-VmTestLock
+                Use-FakePool -FreeGB 64 @{ $first = (New-FakeVM -State 'Running') }
+                Use-Remote 7; Set-VmTestLock -Task $mine -Force
+                Use-Remote 9
+                Set-Live 'PC-A' @{ '7' = '2026-10-22T09:00:00'; '9' = '2026-10-22T09:00:00' }
+                { Invoke-VmTestBegin -Repo 'Mine' -Branch 'x' } | Should Throw 'still open (session session-7 on PC-A,'
+                Set-Live 'PC-A' @{ '9' = '2026-10-22T09:00:00' }
+                Invoke-VmTestBegin -Repo 'Mine' -Branch 'x' | Should Match 'took it over from a session that has closed'
+                (Get-VmTestLock).pid | Should Be 9
+                (Get-VmTestLock).computer | Should Be 'PC-A'
+            }
+            It 'status on the host names the host' {
+                Clear-Remote; Clear-VmTestLock
+                Use-FakeHyperV
+                $env:VMTEST_ON_HOST = '1'
+                (Get-VmTestStatus)[0] | Should Match "^Test VMs on ${env:COMPUTERNAME}: 1 in the pool\. $env:COMPUTERNAME has "
+                Clear-Remote
+                (Get-VmTestStatus)[0] | Should Match '^Test VMs: 1 in the pool\. This PC has '
+            }
+        } finally {
+            Clear-Remote; Clear-VmTestLock
+            Remove-Variable -Scope Global FakeProcs -ErrorAction SilentlyContinue
+        }
+    }
+    Remove-Item Env:\VMTEST_STATE, Env:\VMTEST_HOST_PATH
+    Remove-Variable -Scope Global HostRuns, HostAnswer, PlanArgs -ErrorAction SilentlyContinue
 }
 
 Remove-Item Env:\VMTEST_VM
