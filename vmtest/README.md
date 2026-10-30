@@ -309,6 +309,11 @@ What was checked by hand on the Arm64 Surface host (Windows 11 build 26340, VM b
 - **Errors:** a missing program, control or window each gave a clear message, as did a command from a task that doesn't hold the VM.
 - **Screenshots:** both from the agent and from the host.
 - **A real-world test:** a second Claude session used vmtest to test QuickMail's MSI install, first run and uninstall prompts.
+- **VMs on another PC:** from the Arm64 PC to an x64 host on the home network, with a Microsoft
+  account: `host`, `status`, `begin`, `windows`, `focused`, `push`, `run` (exit codes too),
+  `run -ScriptFile`, `deploy` of a folder, `launch`, `keys`, `type`, `tree`, `close`, both kinds of
+  `shot`, `save`, `begin` again, and `end`. After the Claude session that held a VM there closed, the
+  host saw that from the next session's list, and that session took the VM over without `-Force`.
 
 ## Known limits
 
