@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+# Project folders, models and environments live outside the repository; these catch accidents.
+venv/
+models/
+clips/
+cache/
+out/
