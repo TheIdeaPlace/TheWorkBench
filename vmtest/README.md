@@ -45,6 +45,8 @@ Settings can be changed with environment variables:
 | `VMTEST_RESERVE_GB` | Memory kept for this PC: a VM isn't started unless this much would still be free | `4` |
 | `VMTEST_USER`, `VMTEST_PASSWORD` | The VM's test account | `vmuser`, `vmadmin` |
 | `VMTEST_STATE` | The folder for the locks | `%LOCALAPPDATA%\vmtest` |
+| `VMTEST_HOST` | Another PC whose test VMs to use (see "Using VMs on another PC") | Unset: this PC's own |
+| `VMTEST_HOST_PATH` | Where vmtest keeps its copy of itself on that PC | `C:\vmtest-tool` |
 
 ## Getting Claude sessions to use it
 
@@ -91,6 +93,7 @@ powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$env:VMTEST
 | `end [-Force -VM name]` | Use after the work is merged. Deletes the task's checkpoints from every VM, and puts the VM it holds back to Clean. With `-Force`, it resets `-VM` (or the first VM) even if another task holds it. |
 | `status` | Lists each VM: its state, who has it and since when, when they last used it, and its checkpoints. |
 | `prepare -Pool [-Force]` | Makes the pool's other VMs from the first VM's Clean. `-Force` remakes the ones made from an older Clean, except any a task is using or has saved state on. |
+| `host <computer>` | Sets up the test VMs on another PC for this one: checks it, saves your sign-in for it, and copies vmtest there. See "Using VMs on another PC". |
 
 ### Rules worth knowing
 
@@ -173,6 +176,88 @@ Clean doesn't get Windows updates by itself. To refresh it, use a throwaway task
    once they `end` (or `begin` and `save` on another VM), run it again. A copy already made from the
    current Clean is left as it is.
 
+## Using VMs on another PC
+
+A PC that can't run the test VMs well (one without Hyper-V, or an Arm laptop testing x64 apps) can
+use the VMs of another Windows PC on the same network. That PC is the host. Commands run on its VMs
+over PowerShell remoting, and nothing else changes for you or for Claude.
+
+It's off unless you turn it on. With `VMTEST_HOST` unset, vmtest uses this PC's VMs, as above.
+
+### On the host
+
+1. Set it up as in "One-time setup" above: Hyper-V, the ClaudeTesting VM, and so on. You can run
+   `vmtest prepare` from the host itself, or from the other PC once it's connected.
+2. Turn on PowerShell remoting, from an administrator PowerShell:
+   `Enable-PSRemoting -Force`
+3. Make sure its network is Private, not Public, in Settings, Network and internet. Remoting refuses
+   Public networks.
+4. The account you'll connect with must be in the host's **Hyper-V Administrators** group, or be an
+   administrator there. For a Microsoft account, the account name is `MicrosoftAccount\you@example.com`.
+5. Use the same Windows account that uses vmtest on the host itself, if anyone does. vmtest keeps
+   its locks in that account's `%LOCALAPPDATA%\vmtest`, so a different account would have its own
+   locks, and the two could take the same VM. `vmtest host` warns when the account isn't the one
+   signed in at the host's screen.
+6. If vmtest is also run on the host itself, from its own copy, keep that copy at this version or
+   newer. An older one doesn't know which locks belong to sessions on other PCs, and could take
+   their VMs.
+
+### On your PC
+
+1. If the two PCs aren't in a domain, trust the host by name, from an administrator PowerShell:
+   `Set-Item WSMan:\localhost\Client\TrustedHosts -Value HOSTNAME -Concatenate -Force`
+2. Run this once, in your own PowerShell window, because it asks for the account and password:
+   `powershell -NoProfile -ExecutionPolicy Bypass -File "$env:VMTEST_HOME\vmtest.ps1" host HOSTNAME`
+   It:
+   - checks that the host answers and that the account can manage Hyper-V there;
+   - saves the sign-in to `%LOCALAPPDATA%\vmtest\hosts\HOSTNAME.xml`, protected so that only your
+     Windows account on this PC can read it;
+   - copies vmtest to `C:\vmtest-tool` on the host (or `VMTEST_HOST_PATH`);
+   - lists the host's VMs.
+3. Turn it on: `setx VMTEST_HOST HOSTNAME`, then restart Claude Code.
+4. To go back to this PC's own VMs, run this in PowerShell, then restart Claude Code:
+   `[Environment]::SetEnvironmentVariable('VMTEST_HOST', $null, 'User')`
+5. Run the command in step 2 again whenever the password changes.
+
+### What happens to each command
+
+- Every command except `host` goes to the host, with the same parameters, and comes back with the
+  same output and exit code.
+- The task is still named from the repo and branch of the folder you run vmtest in, here.
+- Files on this PC are copied to the host first, then into the VM as usual: the folder or file for
+  `deploy`, the file for `push`, and the script for `run -ScriptFile`. The copies on the host are
+  deleted afterwards. Large builds take longer, since they're copied twice.
+- `shot` saves the picture on the host, then copies it back to the path you gave.
+- Each command first checks that the host's copy of vmtest is the same as this one, and copies it
+  over when it isn't. Don't edit the copy on the host; it's replaced.
+- Settings such as `VMTEST_POOL` and `VMTEST_RESERVE_GB` are the host's own. Set them on the host.
+
+### Locks across PCs
+
+- The locks, checkpoints and pool belong to the host, so several PCs can share one host, and a
+  PC's tasks are kept apart from another PC's exactly as on one PC.
+- A lock taken from another PC records that PC's name along with the Claude session.
+- With each command, a PC sends the host the list of its processes that are open. So a
+  session on the same PC as the one asking can be checked: once it has closed, another session
+  there can take over its VM.
+- A session on any other PC can't be checked, so it counts as open. vmtest never takes a VM from a
+  session that may still be using it. The longer idle limit (`VMTEST_OPEN_STALE_MINUTES`) still
+  frees it in the end.
+
+### Limits
+
+- The host drives its VMs over PowerShell Direct, as on one PC. Only the step from your PC to the
+  host uses the network.
+- Commands from other PCs wait for each other on the host. A command typed at the host's own
+  keyboard at the same moment doesn't wait for them, so avoid using vmtest on the host itself while
+  other PCs use it.
+- Two PCs with different versions of vmtest replace each other's copy on the host in turn. Keep
+  them on the same version.
+- Outside a domain, the sign-in goes (by NTLM) to whatever PC answers to the host's name. On
+  another network, something else could answer to it, so turn `VMTEST_HOST` off away from home.
+- `vmtest prepare -Pool` takes a few minutes per VM. It runs on the host; keep this PC awake until
+  it finishes.
+
 ## What it can and can't tell you about accessibility
 
 vmtest reads the VM through the .NET UI Automation client. Screen readers use the native UI
@@ -219,7 +304,10 @@ exist. They cover:
 - Claude sessions: which session holds a lock, longer idle time for open sessions, keeping a second
   session off the same task, taking over from a closed one, and the notes a task gets when its VM
   was taken;
-- reading who is signed in.
+- reading who is signed in;
+- VMs on another PC, with the remote session faked: which commands copy files there and back, the
+  staging folder being deleted, keeping vmtest the same on both PCs, output and exit codes coming
+  back, and sessions on other PCs (open, closed, or counted as open because they can't be checked).
 
 What was checked by hand on the Arm64 Surface host (Windows 11 build 26340, VM build 26300):
 
@@ -232,6 +320,11 @@ What was checked by hand on the Arm64 Surface host (Windows 11 build 26340, VM b
 - **Errors:** a missing program, control or window each gave a clear message, as did a command from a task that doesn't hold the VM.
 - **Screenshots:** both from the agent and from the host.
 - **A real-world test:** a second Claude session used vmtest to test QuickMail's MSI install, first run and uninstall prompts.
+- **VMs on another PC:** from the Arm64 PC to an x64 host on the home network, with a Microsoft
+  account: `host`, `status`, `begin`, `windows`, `focused`, `push`, `run` (exit codes too),
+  `run -ScriptFile`, `deploy` of a folder, `launch`, `keys`, `type`, `tree`, `close`, both kinds of
+  `shot`, `save`, `begin` again, and `end`. After the Claude session that held a VM there closed, the
+  host saw that from the next session's list, and that session took the VM over without `-Force`.
 
 ## Known limits
 

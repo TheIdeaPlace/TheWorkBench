@@ -33,6 +33,8 @@ a VM uses the one this task holds.
   shot <out.png> [-FromHost]       picture of the VM's screen
   save                             checkpoint this task, park the VM, release it
   end [-Force -VM name]            after merge: delete this task's checkpoints, its VM back to Clean
+  host <computer>                  one time: use the test VMs on another PC; checks it, saves your
+                                   sign-in for it and copies vmtest there
 
 -Window is a process id (its main window) or part of a window title (dialogs included).
 <control> is an AutomationId or a name; id:<id> matches only an AutomationId (id:-31984 for a
@@ -40,12 +42,15 @@ negative one) and name:<name> only a name.
 -Elevated runs launch, run and the UI commands with admin rights. Without it, programs run like a
 normal user's would; use it for per-machine installs and to drive windows of elevated programs.
 'vmtest run' exits with the command's own exit code.
+
+With VMTEST_HOST set to a computer's name, every command but 'host' runs on that PC's test VMs over
+PowerShell remoting. Files named here are copied there, and pictures are copied back.
 #>
 [CmdletBinding()]
 param(
     [Parameter(Position = 0, Mandatory)]
     [ValidateSet('prepare', 'status', 'begin', 'deploy', 'launch', 'windows', 'tree', 'focused', 'invoke',
-        'setvalue', 'focus', 'keys', 'type', 'run', 'push', 'close', 'shot', 'save', 'end')]
+        'setvalue', 'focus', 'keys', 'type', 'run', 'push', 'close', 'shot', 'save', 'end', 'host')]
     [string]$Command,
     [Parameter(Position = 1)][string]$Target,
     [Parameter(Position = 2)][string]$Value,
@@ -87,6 +92,19 @@ function Ask([hashtable]$request) {
     Show-Answer (Invoke-GuestAgent $request -Elevated:$Elevated)
 }
 
+# With VMTEST_HOST set, the test VMs are on another PC: the command runs there, with the same
+# parameters, and comes back with the same output and exit code.
+if ($Command -ne 'host' -and (Test-ForwardToHost)) {
+    try {
+        $forwarded = Invoke-VmTestOnHost -Command $Command -Parameters $PSBoundParameters
+        $forwarded.Output
+        exit $forwarded.ExitCode
+    } catch {
+        Write-Host "vmtest $Command failed: $($_.Exception.Message)" -ForegroundColor Red
+        exit 1
+    }
+}
+
 $exitCode = 0
 try {
     switch ($Command) {
@@ -125,6 +143,16 @@ try {
         }
         'save' { Invoke-VmTestSave -Repo $Repo -Branch $Branch }
         'end' { Invoke-VmTestEnd -Repo $Repo -Branch $Branch -VM $VM -Force:$Force }
+        'host' {
+            Need "the name of the PC that has the test VMs, such as 'vmtest host HOSTNAME'"
+            # Typed at the console, so it works the same with a screen reader as anything else here.
+            try {
+                $user = Read-Host "Your account on $Target (for example $Target\you, or MicrosoftAccount\you@example.com)"
+                $password = Read-Host "The password for $user" -AsSecureString
+            } catch { throw "It asks for your account on $Target, so run it without -NonInteractive." }
+            if (-not $user) { throw 'No account was given, so nothing was saved.' }
+            Install-VmTestHost -ComputerName $Target -Credential (New-Object System.Management.Automation.PSCredential($user, $password))
+        }
     }
 } catch {
     Write-Host "vmtest $Command failed: $($_.Exception.Message)" -ForegroundColor Red
