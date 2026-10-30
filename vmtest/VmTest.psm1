@@ -1430,8 +1430,8 @@ function Get-HostSetupCommand([string]$ComputerName) {
 function Get-HostCredential([string]$ComputerName) {
     $path = Get-HostCredentialPath $ComputerName
     if (-not (Test-Path $path)) {
-        throw ("VMTEST_HOST is '$ComputerName', but there's no saved sign-in for it. To save one, run this once in your own PowerShell window: " +
-            "$(Get-HostSetupCommand $ComputerName) Or clear VMTEST_HOST to use this PC's own test VMs.")
+        throw ("VMTEST_HOST is '$ComputerName', but there's no saved sign-in for it. To use this PC's own test VMs instead, clear VMTEST_HOST. " +
+            "To save a sign-in, run this once in your own PowerShell window: $(Get-HostSetupCommand $ComputerName)")
     }
     try { Import-Clixml $path }
     catch {
@@ -1440,7 +1440,7 @@ function Get-HostCredential([string]$ComputerName) {
     }
 }
 
-# Every step that reaches the host goes through these three, so the tests can stand in for the host.
+# Every step that reaches the host goes through these, so the tests can stand in for the host.
 function Invoke-OnHost {
     param([Parameter(Mandatory)]$Session, [Parameter(Mandatory)][scriptblock]$ScriptBlock, [object[]]$ArgumentList = @())
     Invoke-Command -Session $Session -ScriptBlock $ScriptBlock -ArgumentList $ArgumentList
@@ -1448,6 +1448,12 @@ function Invoke-OnHost {
 function Copy-ToHost {
     param([Parameter(Mandatory)]$Session, [Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Destination, [switch]$Recurse)
     Copy-Item $Path -Destination $Destination -ToSession $Session -Recurse:$Recurse -Force
+}
+# A new staging folder's path on the host, in that account's temp folder. Its parent holds every
+# staging folder, so leftovers can be found there.
+function Get-HostStagePath {
+    param([Parameter(Mandatory)]$Session)
+    Invoke-OnHost -Session $Session -ScriptBlock { Join-Path $env:TEMP "vmtest-stage\$([guid]::NewGuid())" }
 }
 function Copy-FromHost {
     param([Parameter(Mandatory)]$Session, [Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Destination)
@@ -1607,7 +1613,7 @@ function Invoke-VmTestOnHost {
     try {
         $tool = Get-HostToolPath
         Sync-HostTool -Session $session -Path $tool | Out-Null
-        $stage = Invoke-OnHost -Session $session -ScriptBlock { Join-Path $env:TEMP "vmtest-stage\$([guid]::NewGuid())" }
+        $stage = Get-HostStagePath -Session $session
         $plan = Get-ForwardPlan -Command $Command -Parameters $params -Stage $stage
         try {
             if ($plan.Uploads -or $plan.Download) {

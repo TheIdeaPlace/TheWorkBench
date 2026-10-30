@@ -972,6 +972,8 @@ Describe 'another PC (VMTEST_HOST)' {
         Mock -ModuleName VmTest Invoke-OnHost { $a = @($ArgumentList); & $ScriptBlock @a }
         Mock -ModuleName VmTest Copy-ToHost { Copy-Item -Path $Path -Destination $Destination -Recurse:$Recurse -Force }
         Mock -ModuleName VmTest Copy-FromHost { Copy-Item -Path $Path -Destination $Destination -Force }
+        # Staging folders go in the test drive, never in the real temp folder.
+        Mock -ModuleName VmTest Get-HostStagePath { Join-Path $TestDrive "host-stage\$([guid]::NewGuid())" }
         Mock -ModuleName VmTest Invoke-HostVmTest {
             # What the host would see: its parameters, its environment, and the staged files.
             $staged = @{}
@@ -1003,7 +1005,7 @@ Describe 'another PC (VMTEST_HOST)' {
     It 'says how to save a sign-in when there is none' {
         $before = $env:LOCALAPPDATA
         $env:LOCALAPPDATA = Join-Path $TestDrive 'appdata'
-        try { { InModuleScope VmTest { Get-HostCredential 'HOSTNAME' } } | Should Throw "To save one, run this once in your own PowerShell window: powershell" }
+        try { { InModuleScope VmTest { Get-HostCredential 'HOSTNAME' } } | Should Throw "clear VMTEST_HOST. To save a sign-in, run this once in your own PowerShell window: powershell" }
         finally { $env:LOCALAPPDATA = $before }
     }
     Context 'what goes to the host' {
@@ -1174,27 +1176,27 @@ Describe 'another PC (VMTEST_HOST)' {
                 Use-FakeHost
                 Mock -ModuleName VmTest Sync-HostTool { $false }
                 Mock -ModuleName VmTest Copy-ToHost { throw 'connection dropped' }
-                $stages = Join-Path $env:TEMP 'vmtest-stage'
+                $stages = Join-Path $TestDrive 'host-stage'
                 $before = @(Get-ChildItem $stages -Directory -ErrorAction SilentlyContinue).Count
                 { Invoke-VmTestOnHost -Command 'push' -Parameters @{ Target = 'notes.txt' } } | Should Throw 'connection dropped'
-                (@(Get-ChildItem $stages -Directory -ErrorAction SilentlyContinue).Count -le $before) | Should Be $true
+                @(Get-ChildItem $stages -Directory -ErrorAction SilentlyContinue).Count | Should Be $before
                 $global:HostRuns.Count | Should Be 0
             }
             It "deletes the staging folder when the host's vmtest fails" {
                 Use-FakeHost
                 Mock -ModuleName VmTest Sync-HostTool { $false }
                 Mock -ModuleName VmTest Invoke-HostVmTest { throw 'the host went away' }
-                $stages = Join-Path $env:TEMP 'vmtest-stage'
+                $stages = Join-Path $TestDrive 'host-stage'
                 $before = @(Get-ChildItem $stages -Directory -ErrorAction SilentlyContinue).Count
                 { Invoke-VmTestOnHost -Command 'deploy' -Parameters @{ Target = 'build' } } | Should Throw 'the host went away'
-                (@(Get-ChildItem $stages -Directory -ErrorAction SilentlyContinue).Count -le $before) | Should Be $true
+                @(Get-ChildItem $stages -Directory -ErrorAction SilentlyContinue).Count | Should Be $before
             }
             It 'clears staging folders a day old that a dropped connection left' {
                 Use-FakeHost
                 Mock -ModuleName VmTest Sync-HostTool { $false }
-                $old = New-Item -ItemType Directory (Join-Path $env:TEMP "vmtest-stage\pester-old-$([guid]::NewGuid())") -Force
+                $old = New-Item -ItemType Directory (Join-Path $TestDrive "host-stage\old-$([guid]::NewGuid())") -Force
                 $old.LastWriteTime = (Get-Date).AddDays(-2)
-                $new = New-Item -ItemType Directory (Join-Path $env:TEMP "vmtest-stage\pester-new-$([guid]::NewGuid())") -Force
+                $new = New-Item -ItemType Directory (Join-Path $TestDrive "host-stage\new-$([guid]::NewGuid())") -Force
                 try {
                     Invoke-VmTestOnHost -Command 'push' -Parameters @{ Target = 'notes.txt' } | Out-Null
                     Test-Path $old.FullName | Should Be $false
