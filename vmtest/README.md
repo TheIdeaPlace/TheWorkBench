@@ -194,21 +194,30 @@ It's off unless you turn it on. With `VMTEST_HOST` unset, vmtest uses this PC's 
    Public networks.
 4. The account you'll connect with must be in the host's **Hyper-V Administrators** group, or be an
    administrator there. For a Microsoft account, the account name is `MicrosoftAccount\you@example.com`.
+5. Use the same Windows account that uses vmtest on the host itself, if anyone does. vmtest keeps
+   its locks in that account's `%LOCALAPPDATA%\vmtest`, so a different account would have its own
+   locks, and the two could take the same VM. `vmtest host` warns when the account isn't the one
+   signed in at the host's screen.
+6. If vmtest is also run on the host itself, from its own copy, keep that copy at this version or
+   newer. An older one doesn't know which locks belong to sessions on other PCs, and could take
+   their VMs.
 
 ### On your PC
 
 1. If the two PCs aren't in a domain, trust the host by name, from an administrator PowerShell:
    `Set-Item WSMan:\localhost\Client\TrustedHosts -Value HOSTNAME -Concatenate -Force`
-2. Run `vmtest host HOSTNAME` once, in a normal PowerShell window (not with `-NonInteractive`,
-   because it asks for the account and password). It:
+2. Run this once, in your own PowerShell window, because it asks for the account and password:
+   `powershell -NoProfile -ExecutionPolicy Bypass -File "$env:VMTEST_HOME\vmtest.ps1" host HOSTNAME`
+   It:
    - checks that the host answers and that the account can manage Hyper-V there;
    - saves the sign-in to `%LOCALAPPDATA%\vmtest\hosts\HOSTNAME.xml`, protected so that only your
      Windows account on this PC can read it;
    - copies vmtest to `C:\vmtest-tool` on the host (or `VMTEST_HOST_PATH`);
    - lists the host's VMs.
 3. Turn it on: `setx VMTEST_HOST HOSTNAME`, then restart Claude Code.
-4. To go back to this PC's own VMs: `reg delete HKCU\Environment /v VMTEST_HOST /f`, then restart
-   Claude Code. Run `vmtest host` again whenever the password changes.
+4. To go back to this PC's own VMs, run this in PowerShell, then restart Claude Code:
+   `[Environment]::SetEnvironmentVariable('VMTEST_HOST', $null, 'User')`
+5. Run the command in step 2 again whenever the password changes.
 
 ### What happens to each command
 
@@ -228,7 +237,7 @@ It's off unless you turn it on. With `VMTEST_HOST` unset, vmtest uses this PC's 
 - The locks, checkpoints and pool belong to the host, so several PCs can share one host, and a
   PC's tasks are kept apart from another PC's exactly as on one PC.
 - A lock taken from another PC records that PC's name along with the Claude session.
-- With each command, a PC sends the host the list of its Claude processes that are open. So a
+- With each command, a PC sends the host the list of its processes that are open. So a
   session on the same PC as the one asking can be checked: once it has closed, another session
   there can take over its VM.
 - A session on any other PC can't be checked, so it counts as open. vmtest never takes a VM from a
@@ -244,6 +253,8 @@ It's off unless you turn it on. With `VMTEST_HOST` unset, vmtest uses this PC's 
   other PCs use it.
 - Two PCs with different versions of vmtest replace each other's copy on the host in turn. Keep
   them on the same version.
+- Outside a domain, the sign-in goes (by NTLM) to whatever PC answers to the host's name. On
+  another network, something else could answer to it, so turn `VMTEST_HOST` off away from home.
 - `vmtest prepare -Pool` takes a few minutes per VM. It runs on the host; keep this PC awake until
   it finishes.
 

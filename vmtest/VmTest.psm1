@@ -182,6 +182,12 @@ function Invoke-GitQuietly {
 # The repo and branch of the folder Claude is working in, when they weren't given.
 function Resolve-Task {
     param([string]$Repo, [string]$Branch, [string]$Path = (Get-Location).Path)
+    if ((-not $Repo -or -not $Branch) -and $env:VMTEST_ON_HOST) {
+        # A command from another PC names its task there. The host's own folder is some other
+        # repo, or none, so never guess from it; say why the other PC couldn't tell.
+        if ($env:VMTEST_REMOTE_TASK_ERROR) { throw $env:VMTEST_REMOTE_TASK_ERROR }
+        throw "The PC this command came from didn't name a task; give -Repo and -Branch."
+    }
     if (-not $Repo -or -not $Branch) {
         $top = Invoke-GitQuietly -C $Path rev-parse --show-toplevel
         if (-not $Repo) {
@@ -272,8 +278,14 @@ function Get-ProcessStartTime([int]$Id) {
 # that PC sends who it is in VMTEST_REMOTE_HOLDER, and the holder carries the computer's name.
 function Get-CurrentHolder {
     if ($env:VMTEST_REMOTE_HOLDER) {
-        $r = ConvertFrom-RemoteJson 'VMTEST_REMOTE_HOLDER'
-        if (-not $r.pid -or -not $r.computer) { return }
+        # Damaged or partial, it would make this command look like the user's own terminal, which
+        # may use any VM. So it stops here instead.
+        $r = $null
+        try { $r = $env:VMTEST_REMOTE_HOLDER | ConvertFrom-Json } catch { }
+        $id = 0
+        if (-not $r -or -not [int]::TryParse("$($r.pid)", [ref]$id) -or $id -le 0 -or -not $r.started -or -not $r.computer) {
+            throw "VMTEST_REMOTE_HOLDER doesn't say which Claude session on which PC this command comes from, so vmtest won't act on it."
+        }
         return [pscustomobject]@{ pid = [int]$r.pid; started = "$($r.started)"; session = "$($r.session)"; computer = "$($r.computer)" }
     }
     $id = 0
@@ -283,11 +295,20 @@ function Get-CurrentHolder {
     [pscustomobject]@{ pid = $id; started = $started; session = "$env:CLAUDE_CODE_SESSION_ID" }
 }
 
-# JSON another PC sent in an environment variable, with a clear message if it's damaged.
-function ConvertFrom-RemoteJson([string]$Name) {
-    $text = [Environment]::GetEnvironmentVariable($Name)
-    if (-not $text) { return }
-    try { $text | ConvertFrom-Json } catch { throw "$Name isn't readable JSON, so vmtest can't tell which session this command comes from." }
+# The processes open on the PC this command came from (VMTEST_REMOTE_LIVE): its name, and each
+# process id with its start time, '?' where that couldn't be read. Nothing when there's no list or
+# it's damaged; then that PC's sessions can't be checked, and count as open.
+function Get-RemoteLive {
+    if (-not $env:VMTEST_REMOTE_LIVE) { return }
+    try { $live = $env:VMTEST_REMOTE_LIVE | ConvertFrom-Json } catch { return }
+    if (-not $live.computer -or -not ($live.pids -is [string])) { return }
+    $pids = @{}
+    foreach ($entry in ($live.pids -split ' ')) {
+        $at = $entry.IndexOf('@')
+        $id = 0
+        if ($at -gt 0 -and [int]::TryParse($entry.Substring(0, $at), [ref]$id)) { $pids[$id] = $entry.Substring($at + 1) }
+    }
+    [pscustomobject]@{ computer = "$($live.computer)"; pids = $pids }
 }
 
 # Whether the session holding a lock is still open: $true, $false, or $null when the lock doesn't
@@ -300,10 +321,12 @@ function Test-HolderOpen {
         # with each command, so a command from there can tell. From anywhere else there's no way to
         # check, so it counts as open: never take a VM from a session that may still be using it.
         # The idle limits still free it in the end.
-        $live = ConvertFrom-RemoteJson 'VMTEST_REMOTE_LIVE'
-        if (-not $live -or "$($live.computer)" -ne "$($Lock.computer)") { return $true }
-        $p = @($live.processes | Where-Object { [int]$_.pid -eq [int]$Lock.pid })[0]
-        return [bool]($p -and ($p.started -eq 'unknown' -or $p.started -eq $Lock.started))
+        # A process whose start time that PC couldn't read still exists, so it counts as open.
+        $live = Get-RemoteLive
+        if (-not $live -or $live.computer -ne "$($Lock.computer)") { return $true }
+        if (-not $live.pids.ContainsKey([int]$Lock.pid)) { return $false }
+        $started = $live.pids[[int]$Lock.pid]
+        return [bool]($started -eq '?' -or $started -eq $Lock.started)
     }
     $started = Get-ProcessStartTime ([int]$Lock.pid)
     $started -eq 'unknown' -or $started -eq $Lock.started
@@ -325,8 +348,8 @@ function Test-SameHolder {
 function Get-HolderPlace {
     param([Parameter(Mandatory)]$Lock)
     if (-not $Lock.computer) { return '' }
-    $live = ConvertFrom-RemoteJson 'VMTEST_REMOTE_LIVE'
-    if ($live -and "$($live.computer)" -eq "$($Lock.computer)") { " on $($Lock.computer)" }
+    $live = Get-RemoteLive
+    if ($live -and $live.computer -eq "$($Lock.computer)") { " on $($Lock.computer)" }
     else { " on $($Lock.computer), which can't be checked from here, so it counts as open" }
 }
 
@@ -1399,14 +1422,22 @@ function Get-HostCredentialPath([string]$ComputerName) {
     Join-Path (Join-Path $env:LOCALAPPDATA 'vmtest\hosts') "$(Assert-HostName $ComputerName).xml"
 }
 
+# The whole command line for 'vmtest host', to type into a PowerShell window.
+function Get-HostSetupCommand([string]$ComputerName) {
+    "powershell -NoProfile -ExecutionPolicy Bypass -File `"$(Join-Path $PSScriptRoot 'vmtest.ps1')`" host $ComputerName"
+}
+
 function Get-HostCredential([string]$ComputerName) {
     $path = Get-HostCredentialPath $ComputerName
     if (-not (Test-Path $path)) {
-        throw ("VMTEST_HOST is '$ComputerName', but there's no saved sign-in for it. Run 'vmtest host $ComputerName' once to save one, " +
-            "or clear VMTEST_HOST to use this PC's own test VMs.")
+        throw ("VMTEST_HOST is '$ComputerName', but there's no saved sign-in for it. To save one, run this once in your own PowerShell window: " +
+            "$(Get-HostSetupCommand $ComputerName) Or clear VMTEST_HOST to use this PC's own test VMs.")
     }
     try { Import-Clixml $path }
-    catch { throw "The saved sign-in for $ComputerName in $path can't be read; it only works for the Windows account that saved it. Run 'vmtest host $ComputerName' again." }
+    catch {
+        throw ("The saved sign-in for $ComputerName in $path can't be read; it only works for the Windows account that saved it. " +
+            "To save it again, run this in your own PowerShell window: $(Get-HostSetupCommand $ComputerName)")
+    }
 }
 
 # Every step that reaches the host goes through these three, so the tests can stand in for the host.
@@ -1520,29 +1551,29 @@ function Get-ForwardPlan {
     [pscustomobject]@{ Parameters = $p; Uploads = $uploads; Download = $download }
 }
 
-# The Claude processes open on this PC, so the host can tell which of this PC's sessions holding
-# its VMs are still open. They're the processes with the name of the one running this command.
+# Every process open on this PC, so the host can tell which of this PC's sessions holding its VMs
+# are still open, by process id and start time as on one PC. A Claude session's process can have
+# any name, so none are left out. Kept compact ('<id>@<start>', '?' for a start time this account
+# can't read) to fit in an environment variable; in the rare case it doesn't fit, nothing is sent,
+# and this PC's sessions count as open.
 function Get-LiveSessions {
-    $name = 'claude'
-    $id = 0
-    if ([int]::TryParse("$env:CLAUDE_PID", [ref]$id) -and $id -gt 0) {
-        $p = Get-Process -Id $id -ErrorAction SilentlyContinue
-        if ($p) { $name = $p.ProcessName }
-    }
-    $processes = @(Get-Process -Name $name -ErrorAction SilentlyContinue | ForEach-Object {
-            [pscustomobject]@{ pid = $_.Id; started = $(try { $_.StartTime.ToString('s') } catch { 'unknown' }) } })
-    [pscustomobject]@{ computer = $env:COMPUTERNAME; processes = $processes }
+    $pids = @(Get-Process | ForEach-Object { "$($_.Id)@$(try { $_.StartTime.ToString('s') } catch { '?' })" }) -join ' '
+    $json = [pscustomobject]@{ computer = $env:COMPUTERNAME; pids = $pids } | ConvertTo-Json -Compress
+    if ($json.Length -le 30000) { $json }
 }
 
 # What the host's vmtest needs to know about this end: that it's on the host, who is asking, which
 # of this PC's sessions are open, and the folder the command was run from (for messages).
 function Get-ForwardEnvironment {
+    param([string]$TaskError)
     $e = @{ VMTEST_ON_HOST = '1'; VMTEST_REMOTE_FOLDER = (Get-Location).Path }
+    if ($TaskError) { $e.VMTEST_REMOTE_TASK_ERROR = $TaskError }
     $me = Get-CurrentHolder
     if ($me) {
         $e.VMTEST_REMOTE_HOLDER = [pscustomobject]@{ pid = $me.pid; started = $me.started; session = $me.session; computer = $env:COMPUTERNAME } | ConvertTo-Json -Compress
     }
-    $e.VMTEST_REMOTE_LIVE = Get-LiveSessions | ConvertTo-Json -Compress -Depth 4
+    $live = Get-LiveSessions
+    if ($live) { $e.VMTEST_REMOTE_LIVE = $live }
     $e
 }
 
@@ -1566,8 +1597,11 @@ function Invoke-VmTestOnHost {
     param([Parameter(Mandatory)][string]$Command, [Parameter(Mandatory)][hashtable]$Parameters)
     $computer = Assert-HostName $env:VMTEST_HOST
     $params = @{} + $Parameters
+    # Commands that need no task (status, prepare -Pool) still work outside a git folder, so a
+    # failure here goes along to the host, which gives it to any command that needs the task.
     $task = $null
-    try { $task = Resolve-Task -Repo $params.Repo -Branch $params.Branch } catch { }
+    $taskError = $null
+    try { $task = Resolve-Task -Repo $params.Repo -Branch $params.Branch } catch { $taskError = $_.Exception.Message }
     if ($task) { $params.Repo = $task.Repo; $params.Branch = $task.Branch }
     $session = New-HostSession -ComputerName $computer
     try {
@@ -1577,7 +1611,13 @@ function Invoke-VmTestOnHost {
         $plan = Get-ForwardPlan -Command $Command -Parameters $params -Stage $stage
         try {
             if ($plan.Uploads -or $plan.Download) {
-                Invoke-OnHost -Session $session -ArgumentList $stage -ScriptBlock { param($s) New-Item $s -ItemType Directory -Force | Out-Null }
+                Invoke-OnHost -Session $session -ArgumentList $stage -ScriptBlock {
+                    param($s)
+                    # A dropped connection can leave a staging folder behind; clear any a day old.
+                    Get-ChildItem (Split-Path $s) -Directory -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-1) } |
+                        ForEach-Object { Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
+                    New-Item $s -ItemType Directory -Force | Out-Null
+                }
             }
             foreach ($u in $plan.Uploads) {
                 if ($u.Folder) {
@@ -1588,7 +1628,7 @@ function Invoke-VmTestOnHost {
                     Copy-ToHost $session $u.Local $u.Remote
                 }
             }
-            $r = Invoke-HostVmTest -Session $session -ToolPath $tool -Parameters $plan.Parameters -Environment (Get-ForwardEnvironment)
+            $r = Invoke-HostVmTest -Session $session -ToolPath $tool -Parameters $plan.Parameters -Environment (Get-ForwardEnvironment -TaskError $taskError)
             $code = [int]$r.code
             $out = @($r.out)
             if ($plan.Download -and $code -eq 0) {
@@ -1616,7 +1656,9 @@ function Install-VmTestHost {
     try {
         $hv = Invoke-OnHost -Session $session -ScriptBlock {
             if (-not (Get-Command Get-VM -ErrorAction SilentlyContinue)) { return @{ ok = $false; why = "Hyper-V isn't turned on there." } }
-            try { @{ ok = $true; vms = @(Get-VM -ErrorAction Stop | ForEach-Object { $_.Name }) } }
+            # Who is signed in at its screen, to compare with this account (see the README).
+            $console = "$((Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue).UserName)"
+            try { @{ ok = $true; vms = @(Get-VM -ErrorAction Stop | ForEach-Object { $_.Name }); me = "$env:USERDOMAIN\$env:USERNAME"; console = $console } }
             catch { @{ ok = $false; why = "That account can't manage Hyper-V there: $($_.Exception.Message) Add it to the Hyper-V Administrators group on that PC, then try again." } }
         }
         if (-not $hv.ok) { throw "Connected to $ComputerName as $($Credential.UserName), but $($hv.why)" }
@@ -1630,8 +1672,12 @@ function Install-VmTestHost {
     "Saved the sign-in to $path. Only your Windows account on this PC can read it."
     if ($copied) { "Copied vmtest to $tool on $ComputerName." } else { "vmtest on $ComputerName ($tool) is already the same as this one." }
     if ($vms) { "Its VMs: $($vms -join ', ')." } else { "It has no VMs yet. Build one named ClaudeTesting there, then run 'vmtest prepare' from here once VMTEST_HOST is set." }
+    # Locks are kept per Windows account, so another account's vmtest on the host wouldn't see them.
+    if ($hv.console -and $hv.me -and $hv.console -ne $hv.me) {
+        "Note: this signs in to $ComputerName as $($hv.me), but $($hv.console) is signed in at its screen. Use the same account the host's own vmtest uses, or the two won't see each other's locks."
+    }
     "To use its test VMs from this PC, run: setx VMTEST_HOST $ComputerName"
-    "Then restart Claude Code. To go back to this PC's own VMs, run: reg delete HKCU\Environment /v VMTEST_HOST /f"
+    "Then restart Claude Code. To go back to this PC's own VMs, run: [Environment]::SetEnvironmentVariable('VMTEST_HOST', `$null, 'User')"
 }
 
 Export-ModuleMember -Function Get-VmTestConfig, Get-PoolNames, ConvertTo-TaskCheckpointName, Resolve-Task, Get-VmTestLock,
