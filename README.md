@@ -34,9 +34,9 @@ built for JAWS and NVDA first and packaged for the Microsoft Store. The engines 
 the iOS ones, with the same sentences and the same test suites, and every game can be played
 through to the end in tests by the same keys a person presses. Menus stay off the Tab ring, the
 hand is one Tab stop that the arrows move through, a card that cannot be played says why, and every
-announcement has a category the player can turn off. It lives in
-[`thecardplace/windows/`](./thecardplace/windows/), and its README says how it is built, tested
-and packaged.
+announcement has a category the player can turn off. It has its own
+repository, [TheIdeaPlace/TheCardPlace](https://github.com/TheIdeaPlace/TheCardPlace), whose
+README says how it is built, tested, released and packaged.
 
 ### Euchre
 Euchre for four, in two fixed partnerships, first to ten points. Play against three computer
