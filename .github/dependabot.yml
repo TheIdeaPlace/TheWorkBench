@@ -1,0 +1,91 @@
+version: 2
+updates:
+  # Versions of the actions used in .github/workflows/*.yml.
+  #
+  # Grouped deliberately: a runtime-wide move like the Node 20 -> 24
+  # migration touches every action at once, and ungrouped that arrives as
+  # one PR per action. As a single PR it is one review and one merge, and
+  # the workflows never sit half-migrated between merges.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  # The Card Place games, one package.json each. None has dependencies
+  # today (the tests use only Node, and the Workers deploy with a pinned
+  # wrangler through npx), so this finds nothing yet. One entry with
+  # `directories` and one group means anything added later moves in every
+  # game in a single PR. Listed by name rather than with a glob, because
+  # thecardplace/ also holds folders with no package.json (ios, shared, windows).
+  - package-ecosystem: npm
+    directories:
+      - "/thecardplace/Cribbage"
+      - "/thecardplace/cribbage-multiplayer"
+      - "/thecardplace/euchre"
+      - "/thecardplace/hearts"
+      - "/thecardplace/sheephead"
+      - "/thecardplace/sheephead-multiplayer"
+      - "/thecardplace/spades"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: deps
+    groups:
+      card-games:
+        patterns:
+          - "*"
+
+  # The Card Place's iOS package (CardGamesKit). No package dependencies
+  # yet; here so anything added later is watched from the day it lands.
+  - package-ecosystem: swift
+    directory: "/thecardplace/ios/CardGamesKit"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: deps
+    groups:
+      swift:
+        patterns:
+          - "*"
+
+  # audio-demo/requirements.txt. Every version is pinned to the ones the
+  # QuickMail demo was made with, so nothing moves unless it moves here. No UI
+  # toolkit, so one group: a week's changes arrive as one PR, and a new
+  # Kokoro or Whisper version can be heard against the old before it merges.
+  - package-ecosystem: pip
+    directory: "/audio-demo"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: deps
+    groups:
+      audio-demo:
+        patterns:
+          - "*"
+
+  # QuickCalc (app, core library and both test projects) and UiaNotifyDemo,
+  # in one entry so the shared test stack moves everywhere in one PR. Both
+  # apps are WPF, which comes with the .NET SDK rather than from NuGet, so
+  # there is no UI toolkit package to split out. FlaUI is the UI test
+  # driver, not the UI itself, so it rides with the rest.
+  - package-ecosystem: nuget
+    directories:
+      - "/quickcalc/src/QuickCalc"
+      - "/quickcalc/src/QuickCalc.Core"
+      - "/quickcalc/tests/QuickCalc.Core.Tests"
+      - "/quickcalc/tests/QuickCalc.UiTests"
+      - "/UiaNotifyDemo"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: deps
+    groups:
+      nuget:
+        patterns:
+          - "*"
