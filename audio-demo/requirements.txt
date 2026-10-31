@@ -1,6 +1,6 @@
 # Versions the QuickMail demo (October 2026) was made with.
 kokoro-onnx==0.6.1
-onnxruntime==1.31.0
+onnxruntime==1.31.1
 soundfile==0.14.0
 numpy==2.5.4
 faster-whisper==1.2.1
