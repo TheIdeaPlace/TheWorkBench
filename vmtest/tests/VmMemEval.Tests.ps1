@@ -84,13 +84,22 @@ Describe 'summing up a run' {
             (Get-CounterSummary -Rows (Rows 12 -available 90) -MaxGB $max).LowAvailableSeconds | Should Be 60
         }
     }
-    It 'ignores paging in the first 2 minutes' {
-        $early = @(Rows 24 -pages 500) + @(Rows 24 -pages 0)
-        (Get-CounterSummary -Rows $early -MaxGB 4).PagingSeconds | Should Be 0
+    It 'counts paging from the first sample, since the counters start after the settling time' {
+        (Get-CounterSummary -Rows (Rows 10 -pages 500) -MaxGB 4).PagingSeconds | Should Be 50
     }
-    It 'counts paging after the first 2 minutes' {
-        $late = @(Rows 24 -pages 0) + @(Rows 10 -pages 500)
-        (Get-CounterSummary -Rows $late -MaxGB 4).PagingSeconds | Should Be 50
+    It 'gives no figure, not a healthy 0, for a measure with no values' {
+        $blank = 1..50 | ForEach-Object { [pscustomobject]@{ AvailableMB = $null; PagesInput = $null; Committed = $null; CommitLimit = $null } }
+        $s = Get-CounterSummary -Rows $blank -MaxGB 4
+        $null -eq $s.LowAvailableSeconds | Should Be $true
+        $null -eq $s.PagingSeconds | Should Be $true
+        $null -eq $s.PeakCommitPercent | Should Be $true
+    }
+    It 'takes the sample spacing from the log''s own times' {
+        $t = [datetime]'2026-11-01T12:00:00'
+        $slow = 0..5 | ForEach-Object { [pscustomobject]@{ Time = $t.AddSeconds($_ * 10); AvailableMB = 50; PagesInput = 0; Committed = 1GB; CommitLimit = 8GB } }
+        $s = Get-CounterSummary -Rows $slow -MaxGB 4
+        $s.CoveredSeconds | Should Be 50
+        $s.LowAvailableSeconds | Should Be 60
     }
     It 'gives peak commit as a percentage of the limit' {
         (Get-CounterSummary -Rows (Rows 3 -committed 6GB -limit 8GB) -MaxGB 4).PeakCommitPercent | Should Be 75
@@ -110,6 +119,16 @@ Describe 'summing up a run' {
     }
 }
 
+Describe 'whether counters speak for the whole workload' {
+    $good = [pscustomobject]@{ LowAvailableSeconds = 0; PagingSeconds = 0; PeakCommitPercent = 50; CoveredSeconds = 600 }
+    It 'accepts a log as long as the workload' { Test-CountersComplete $good 600 | Should Be $true }
+    It 'refuses a log that stopped early' { Test-CountersComplete $good 1800 | Should Be $false }
+    It 'refuses a log of blanks' {
+        Test-CountersComplete ([pscustomobject]@{ LowAvailableSeconds = $null; PagingSeconds = $null; PeakCommitPercent = $null; CoveredSeconds = 600 }) 600 | Should Be $false
+    }
+    It 'refuses no summary at all' { Test-CountersComplete $null 600 | Should Be $false }
+}
+
 Describe 'the criteria' {
     $control = 1..3 | ForEach-Object { New-Run -Config 'MemEval-12' }
     It 'passes a healthy run' {
@@ -123,7 +142,66 @@ Describe 'the criteria' {
         (Check $checks 10).Result | Should Be 'NotMeasured'
     }
 
+    Context 'missing data never passes' {
+        It 'doesn''t pass when Control measured speech and this lost it' {
+            $withSpeech = New-Run -Config 'MemEval-12' -Speech ([pscustomobject]@{ failed = @(); misplaced = 0; audioGaps = 0 })
+            $checks = Run-Criteria (New-Run) $withSpeech
+            (Check $checks 2).Result | Should Be 'Incomplete'
+            Test-ChecksPass $checks | Should Be $false
+        }
+        It 'doesn''t pass when only some runs have speech' {
+            $s = [pscustomobject]@{ failed = @(); misplaced = 0; audioGaps = 0 }
+            (Check (Run-Criteria @((New-Run -Speech $s), (New-Run)) (New-Run -Config 'MemEval-12' -Speech $s)) 2).Result | Should Be 'Incomplete'
+        }
+        It 'doesn''t pass when Control had latency or limits and this lost them' {
+            (Check (Run-Criteria (New-Run) (New-Run -Config 'MemEval-12' -Latency ([pscustomobject]@{ medianMs = 1; worstMs = 1 }))) 6).Result | Should Be 'Incomplete'
+            (Check (Run-Criteria (New-Run) (New-Run -Config 'MemEval-12' -Limits @([pscustomobject]@{ name = 'x'; limit = 30; actual = 1 }))) 4).Result | Should Be 'Incomplete'
+        }
+        It 'doesn''t pass when one run in three has no counters' {
+            $lost = New-Run
+            $lost.guest = $null
+            $checks = Run-Criteria @((New-Run), (New-Run), $lost) $control
+            foreach ($n in 7, 8, 9) { (Check $checks $n).Result | Should Be 'Incomplete' }
+            Test-ChecksPass $checks | Should Be $false
+        }
+        It 'doesn''t pass when no events came back' {
+            $lost = New-Run
+            $lost.guestEvents = $null
+            (Check (Run-Criteria $lost $control) 3).Result | Should Be 'Incomplete'
+        }
+        It 'still fails a bad reading, even with another run''s counters missing' {
+            $lost = New-Run
+            $lost.guest = $null
+            (Check (Run-Criteria @((New-Run -LowSeconds 300), $lost) $control) 7).Result | Should Be 'Fail'
+        }
+        It 'doesn''t pass when a soak''s counters stopped short of Control''s' {
+            (Check (Run-Criteria (New-Run) (New-Run -Config 'MemEval-12' -SoakGrowthGB 0)) 10).Result | Should Be 'Incomplete'
+        }
+        It 'treats a soak growth of exactly 0 as measured' {
+            (Check (Run-Criteria (New-Run -SoakGrowthGB 0) (New-Run -Config 'MemEval-12' -SoakGrowthGB 0)) 10).Result | Should Be 'Pass'
+        }
+        It 'treats no duration as Incomplete, not a pass' {
+            $none = New-Run
+            $none.durationSeconds = $null
+            (Check (Run-Criteria $none $control) 5).Result | Should Be 'Incomplete'
+        }
+    }
+
     Context '1: same results' {
+        It 'fails a run of 0 tests, the extreme of the 3,920 of 4,920 run' {
+            (Check (Run-Criteria (New-Run -TestsTotal 0) (New-Run -Config 'MemEval-12' -TestsTotal 4920)) 1).Result | Should Be 'Fail'
+        }
+        It 'fails exit 0 where Control always exited 1' {
+            (Check (Run-Criteria (New-Run -ExitCode 0) (New-Run -Config 'MemEval-12' -ExitCode 1)) 1).Result | Should Be 'Fail'
+        }
+        It 'never lets a died run match a Control that died' {
+            (Check (Run-Criteria (New-Run -ExitCode -1) (New-Run -Config 'MemEval-12' -ExitCode -1)) 1).Result | Should Be 'Fail'
+        }
+        It 'fails a run with no exit code' {
+            $none = New-Run
+            $none.exitCode = $null
+            (Check (Run-Criteria $none $control) 1).Result | Should Be 'Fail'
+        }
         It 'fails an exit code Control never had' { (Check (Run-Criteria (New-Run -ExitCode 1) $control) 1).Result | Should Be 'Fail' }
         It 'fails a workload that died outright' { Test-ChecksPass (Run-Criteria (New-Run -ExitCode -1) $control) | Should Be $false }
         It 'passes a failing exit code Control had too' {
@@ -224,8 +302,8 @@ Describe 'the criteria' {
     }
 
     Context '10: soak' {
-        It 'passes flat memory' { (Check (Run-Criteria (New-Run -SoakGrowthGB 0.01) $control) 10).Result | Should Be 'Pass' }
-        It 'fails steady growth' { (Check (Run-Criteria (New-Run -SoakGrowthGB 1) $control) 10).Result | Should Be 'Fail' }
+        It 'passes flat memory' { (Check (Run-Criteria (New-Run -SoakGrowthGB 0.01) (New-Run -Config 'MemEval-12' -SoakGrowthGB 0)) 10).Result | Should Be 'Pass' }
+        It 'fails steady growth' { (Check (Run-Criteria (New-Run -SoakGrowthGB 1) (New-Run -Config 'MemEval-12' -SoakGrowthGB 0)) 10).Result | Should Be 'Fail' }
     }
 
     It 'catches a starved run, which is what the too-small VM has to prove' {
@@ -241,7 +319,8 @@ Describe 'a run with no counters' {
         $empty = New-Run
         $empty.guest = $null
         $checks = Run-Criteria $empty $control
-        foreach ($n in 7, 8, 9, 10) { (Check $checks $n).Result | Should Be 'NotMeasured' }
+        foreach ($n in 7, 8, 9) { (Check $checks $n).Result | Should Be 'Incomplete' }
+        Test-ChecksPass $checks | Should Be $false
     }
     It 'still fails on what it did measure' {
         $empty = New-Run -ExitCode -1
@@ -257,15 +336,16 @@ Describe 'a run with no counters' {
 }
 
 Describe 'whether a run counts' {
-    function Why { param([bool]$Started = $true, [int]$ExitCode = 0, [bool]$HasCounters = $true, [string[]]$OtherVMs = @(), $HostMin = 20000, [bool]$FirstOnVM = $false)
-        Get-RunDiscardReason -Started $Started -ExitCode $ExitCode -HasCounters $HasCounters -OtherVMs $OtherVMs -HostMinAvailableMB $HostMin -FirstOnVM $FirstOnVM -StartError 'boom' }
+    function Why { param([bool]$Started = $true, [int]$ExitCode = 0, [bool]$HasCounters = $true, [string[]]$OtherVMs = @(), $HostMin = 20000, [bool]$FirstOnVM = $false, [bool]$HasHostRows = $true)
+        Get-RunDiscardReason -Started $Started -ExitCode $ExitCode -HasCounters $HasCounters -OtherVMs $OtherVMs -HostMinAvailableMB $HostMin -HasHostRows $HasHostRows -FirstOnVM $FirstOnVM -StartError 'boom' }
     It 'counts a clean run' { Why | Should Be '' }
     It 'throws out a run that never started' { Why -Started $false | Should Match 'boom' }
     It 'throws out a fine workload whose counters didn''t come back' { Why -HasCounters $false | Should Match 'counters' }
     It 'keeps a failed workload with no counters, because that may be the shortage itself' { Why -ExitCode -1 -HasCounters $false | Should Be '' }
     It 'throws out a run while another VM was running' { Why -OtherVMs 'ClaudeTesting' | Should Match 'ClaudeTesting' }
     It 'throws out a run when the PC went below its reserve' { Why -HostMin 3000 | Should Match 'reserve' }
-    It 'keeps a run when the host numbers are missing' { Why -HostMin $null | Should Be '' }
+    It 'throws out a run with no host rows, since nothing shows another VM wasn''t running' { Why -HasHostRows $false | Should Match 'own numbers' }
+    It 'counts a failed first run, because a failure always counts' { Why -ExitCode 1 -FirstOnVM $true | Should Be '' }
     It 'throws out the first run on a VM as warm-up' { Why -FirstOnVM $true | Should Match 'warm-up' }
 }
 
@@ -281,35 +361,91 @@ Describe 'choosing runs' {
 
 Describe 'the smallest passing size' {
     $control = 1..3 | ForEach-Object { New-Run -Config 'MemEval-12' }
+    function Three([string]$config, [int]$exit = 0) { 1..3 | ForEach-Object { New-Run -Config $config -ExitCode $exit } }
     It 'is the smallest candidate that passes' {
-        $r = Get-WorkloadResult -Runs (@($control) + (New-Run -Config 'MemEval-8') + (New-Run -Config 'MemEval-6') + (New-Run -Config 'MemEval-4' -ExitCode 1)) -Workload 'W7' -HostName 'PC1'
+        $r = Get-WorkloadResult -Runs (@($control) + @(Three 'MemEval-8') + @(Three 'MemEval-6') + @(Three 'MemEval-4' 1)) -Workload 'W7' -HostName 'PC1'
         $r.SmallestGB | Should Be 6
+    }
+    It 'stops at the first size to pass, without the larger ones having run' {
+        (Get-WorkloadResult -Runs (@($control) + @(Three 'MemEval-4')) -Workload 'W7' -HostName 'PC1').SmallestGB | Should Be 4
+    }
+    It 'doesn''t believe a smaller size that passed after a larger one failed' {
+        $r = Get-WorkloadResult -Runs (@($control) + @(Three 'MemEval-8' 1) + @(Three 'MemEval-4')) -Workload 'W7' -HostName 'PC1'
+        $null -eq $r.SmallestGB | Should Be $true
+        $r.OutOfOrder | Should Be $true
+    }
+    It 'takes the size above the failure when there is one' {
+        $r = Get-WorkloadResult -Runs (@($control) + @(Three 'MemEval-8') + @(Three 'MemEval-6' 1) + @(Three 'MemEval-4')) -Workload 'W7' -HostName 'PC1'
+        $r.SmallestGB | Should Be 8
+    }
+    It 'doesn''t judge a size with too few runs' {
+        $r = Get-WorkloadResult -Runs (@($control) + (New-Run -Config 'MemEval-4')) -Workload 'W7' -HostName 'PC1'
+        $null -eq $r.SmallestGB | Should Be $true
+        $r.Sizes[0].Reason | Should Match '1 of the 3'
+    }
+    It 'doesn''t judge against too few Control runs' {
+        $r = Get-WorkloadResult -Runs (@((New-Run -Config 'MemEval-12')) + @(Three 'MemEval-4')) -Workload 'W7' -HostName 'PC1'
+        $null -eq $r.SmallestGB | Should Be $true
+        $r.ControlRuns | Should Be 1
+    }
+    It 'accepts one run each for the workloads the plan runs once' {
+        $r = Get-WorkloadResult -Runs @((New-Run -Workload 'W9' -Config 'MemEval-12'), (New-Run -Workload 'W9')) -Workload 'W9' -HostName 'PC1'
+        $r.SmallestGB | Should Be 4
+    }
+    It 'judges nothing when every Control run died, whatever the size did' {
+        $dead = 1..3 | ForEach-Object { $x = New-Run -Config 'MemEval-12' -ExitCode -1; $x.guest = $null; $x }
+        $r = Get-WorkloadResult -Runs (@($dead) + @(Three 'MemEval-4' -1)) -Workload 'W7' -HostName 'PC1'
+        $null -eq $r.SmallestGB | Should Be $true
+        $r.ControlProblem | Should Match 'died'
+        $null -eq $r.PeakGB | Should Be $true
+    }
+    It 'judges nothing when a Control run has no counters' {
+        $bare = New-Run -Config 'MemEval-12'
+        $bare.guest = $null
+        (Get-WorkloadResult -Runs (@($control) + $bare + @(Three 'MemEval-4')) -Workload 'W7' -HostName 'PC1').ControlProblem | Should Match 'no counters'
+    }
+    It 'doesn''t compare runs with different settings' {
+        $short = Three 'MemEval-4'
+        $short | ForEach-Object { $_ | Add-Member setup 'settle=60;Minutes=3' }
+        $r = Get-WorkloadResult -Runs (@($control) + @($short)) -Workload 'W7' -HostName 'PC1'
+        $null -eq $r.SmallestGB | Should Be $true
+        $r.Sizes[0].Reason | Should Match 'different settings'
+    }
+    It 'trusts nothing for a workload where the too-small VM passed' {
+        $r = Get-WorkloadResult -Runs (@($control) + @(Three 'MemEval-4') + @(Three 'MemEval-2')) -Workload 'W7' -HostName 'PC1'
+        $null -eq $r.SmallestGB | Should Be $true
+        $r.CriteriaBlind | Should Be $true
+    }
+    It 'records when the too-small VM failed, which proves the criteria work' {
+        $r = Get-WorkloadResult -Runs (@($control) + @(Three 'MemEval-4') + @(Three 'MemEval-2' 1)) -Workload 'W7' -HostName 'PC1'
+        $r.ShortageCaught | Should Be $true
+        $r.SmallestGB | Should Be 4
     }
     It 'is unknown when no candidate has been run' {
         $null -eq (Get-WorkloadResult -Runs @($control) -Workload 'W7' -HostName 'PC1').SmallestGB | Should Be $true
     }
     It 'never counts the too-small VM as a size to use, even if it passes' {
-        $r = Get-WorkloadResult -Runs (@($control) + (New-Run -Config 'MemEval-2')) -Workload 'W7' -HostName 'PC1'
+        $r = Get-WorkloadResult -Runs (@($control) + @(Three 'MemEval-2')) -Workload 'W7' -HostName 'PC1'
         $null -eq $r.SmallestGB | Should Be $true
     }
     It 'judges nothing when Control has no runs' {
-        $r = Get-WorkloadResult -Runs @((New-Run -Config 'MemEval-4')) -Workload 'W7' -HostName 'PC1'
+        $r = Get-WorkloadResult -Runs @(Three 'MemEval-4') -Workload 'W7' -HostName 'PC1'
         $null -eq $r.SmallestGB | Should Be $true
         $null -eq $r.Sizes[0].Pass | Should Be $true
     }
     It 'judges nothing when Control itself ran out of memory' {
-        $bad = New-Run -Config 'MemEval-12' -Exhaustion 1
-        $null -eq (Get-WorkloadResult -Runs @($bad, (New-Run -Config 'MemEval-4')) -Workload 'W7' -HostName 'PC1').SmallestGB | Should Be $true
+        $bad = 1..3 | ForEach-Object { New-Run -Config 'MemEval-12' -Exhaustion 1 }
+        $null -eq (Get-WorkloadResult -Runs (@($bad) + @(Three 'MemEval-4')) -Workload 'W7' -HostName 'PC1').SmallestGB | Should Be $true
     }
     It 'compares only with Control on the same host' {
         $slowOther = 1..3 | ForEach-Object { New-Run -Config 'MemEval-12' -HostName 'PC2' -Duration 1000 }
-        $r = Get-WorkloadResult -Runs (@($control) + @($slowOther) + (New-Run -Duration 500)) -Workload 'W7' -HostName 'PC1'
+        $r = Get-WorkloadResult -Runs (@($control) + @($slowOther) + @(1..3 | ForEach-Object { New-Run -Duration 500 })) -Workload 'W7' -HostName 'PC1'
         $null -eq $r.SmallestGB | Should Be $true
     }
 }
 
 Describe 'the decision' {
-    function New-Result([string]$workload, [string]$hostName, $smallest) { [pscustomobject]@{ Workload = $workload; Host = $hostName; SmallestGB = $smallest; Sizes = @() } }
+    function New-Result([string]$workload, [string]$hostName, $smallest) { [pscustomobject]@{ Workload = $workload; Host = $hostName; SmallestGB = $smallest; ControlRuns = 3; Sizes = @() } }
     function All([double]$light, [double]$heavy, [string[]]$hosts = @('PC1', 'PC2')) {
         foreach ($h in $hosts) {
             foreach ($w in 'W0', 'W1', 'W2', 'W3', 'W4', 'W5', 'W6') { New-Result $w $h $light }
@@ -317,53 +453,101 @@ Describe 'the decision' {
         }
     }
     It 'is one size when the heavy work fits the default' {
-        $d = Get-EvalDecision -Results @(All 4 4)
+        $d = Get-EvalDecision -Hosts PC1, PC2 -Results @(All 4 4)
         $d.DefaultGB | Should Be 4
         $d.Answer | Should Match 'One size: 4 GB'
     }
     It 'takes the largest any light workload needs on any host' {
         $results = @(All 4 4) | ForEach-Object { if ($_.Workload -eq 'W4' -and $_.Host -eq 'PC2') { $_.SmallestGB = 6 }; $_ }
-        (Get-EvalDecision -Results $results).DefaultGB | Should Be 6
+        (Get-EvalDecision -Hosts PC1, PC2 -Results $results).DefaultGB | Should Be 6
     }
     It 'asks Phase 3 about tiers rather than assuming them, when heavy work needs more' {
-        $d = Get-EvalDecision -Results @(All 4 8)
+        $d = Get-EvalDecision -Hosts PC1, PC2 -Results @(All 4 8)
         $d.Answer | Should Match 'Phase 3 decides'
         $d.HeavyGB | Should Be 8
     }
     It 'gives no default while any light workload has no passing size' {
         $results = @(All 4 4) | ForEach-Object { if ($_.Workload -eq 'W4' -and $_.Host -eq 'PC1') { $_.SmallestGB = $null }; $_ }
-        $null -eq (Get-EvalDecision -Results $results).DefaultGB | Should Be $true
+        $null -eq (Get-EvalDecision -Hosts PC1, PC2 -Results $results).DefaultGB | Should Be $true
     }
     It 'gives no default while a workload hasn''t been run on a host' {
         $results = @(All 4 4) | Where-Object { -not ($_.Workload -eq 'W4' -and $_.Host -eq 'PC1') }
         $null -eq (Get-EvalDecision -Results $results -Hosts 'PC1', 'PC2').DefaultGB | Should Be $true
     }
+    It 'says not yet, and names the host, when one host has no results' {
+        $d = Get-EvalDecision -Hosts PC1, PC2 -Results @(All 4 4 'PC1')
+        $d.Answer | Should Match 'Not yet.*PC2'
+        $null -eq $d.DefaultGB | Should Be $true
+    }
+    It 'says the size isn''t final until the soak has passed there' {
+        (Get-EvalDecision -Hosts PC1, PC2 -Results @(All 4 4)).Notes -join ' ' | Should Match 'soak hasn''t passed'
+    }
+    It 'says when no run has shown the criteria catching a shortage' {
+        (Get-EvalDecision -Hosts PC1, PC2 -Results @(All 4 4)).Notes -join ' ' | Should Match 'catching a real shortage'
+    }
     It 'notices when the hosts need different sizes' {
         $results = @(All 4 4 'PC1') + @(All 4 8 'PC2')
-        (Get-EvalDecision -Results $results).HostsDiffer | Should Be $true
+        (Get-EvalDecision -Hosts PC1, PC2 -Results $results).HostsDiffer | Should Be $true
     }
     It 'doesn''t when they need the same' {
-        (Get-EvalDecision -Results @(All 6 6)).HostsDiffer | Should Be $false
+        (Get-EvalDecision -Hosts PC1, PC2 -Results @(All 6 6)).HostsDiffer | Should Be $false
+    }
+}
+
+Describe 'calling vmtest for the evaluation' {
+    $tool = Join-Path $TestDrive 'fake-vmtest.ps1'
+    Set-Content $tool @'
+"pool=$env:VMTEST_POOL host=[$env:VMTEST_HOST]"
+"args=$($args -join ' ')"
+exit 7
+'@
+    It 'passes the pool and clears the host for the call, and returns the output and exit code' {
+        $r = Invoke-EvalVmTest -ToolPath $tool -Pool 'A', 'B' -Arguments @('begin', '-VM', 'B')
+        $r.ExitCode | Should Be 7
+        $r.Output[0] | Should Be 'pool=A,B host=[]'
+        $r.Output[1] | Should Be 'args=begin -VM B'
+    }
+    It 'leaves the caller''s settings as they were, so a later begin there can''t get an eval VM' {
+        $savedPool = $env:VMTEST_POOL; $savedHost = $env:VMTEST_HOST
+        try {
+            $env:VMTEST_POOL = 'mine'; $env:VMTEST_HOST = 'OTHERPC'
+            Invoke-EvalVmTest -ToolPath $tool -Pool 'A' | Out-Null
+            $env:VMTEST_POOL | Should Be 'mine'
+            $env:VMTEST_HOST | Should Be 'OTHERPC'
+        } finally { $env:VMTEST_POOL = $savedPool; $env:VMTEST_HOST = $savedHost }
     }
 }
 
 Describe 'the report' {
     It 'reports results, failures and thrown-out runs' {
         $runs = @(1..3 | ForEach-Object { New-Run -Config 'MemEval-12' }) + (New-Run -ExitCode 1) + (New-Run -Discarded)
-        $text = (Format-EvalReport -Runs $runs) -join "`n"
+        $text = (Format-EvalReport -Runs $runs -Hosts PC1 -MinRuns 1) -join "`n"
         $text | Should Match 'criterion 1, Same results'
         $text | Should Match 'Runs thrown out'
         $text | Should Match 'TaskTimePercent: 10'
     }
     It 'says None when nothing failed' {
         $runs = @(1..3 | ForEach-Object { New-Run -Config 'MemEval-12' }) + (New-Run)
-        (Format-EvalReport -Runs $runs) -join "`n" | Should Match 'None\.'
+        (Format-EvalReport -Runs $runs -Hosts PC1 -MinRuns 1) -join "`n" | Should Match 'None\.'
+    }
+    It 'uses plain sentences, not a table a screen reader reads as bars' {
+        $runs = @(1..3 | ForEach-Object { New-Run -Config 'MemEval-12' }) + (New-Run)
+        (Format-EvalReport -Runs $runs -Hosts PC1) -join "`n" | Should Not Match '\|'
+    }
+    It 'reports the Control run count, even for exactly one run' {
+        (Format-EvalReport -Runs @((New-Run -Config 'MemEval-12')) -Hosts PC1) -join "`n" | Should Match 'PC1, W7: 1 Control runs'
     }
     It 'reads back the JSON a run writes' {
         $dir = Join-Path $TestDrive 'runs\PC1'
         New-Item $dir -ItemType Directory -Force | Out-Null
         New-Run | Add-Member -PassThru schema (Get-EvalSchema) | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $dir 'a.json') -Encoding UTF8
         @(Read-EvalRuns -Root $TestDrive)[0].workload | Should Be 'W7'
+    }
+    It 'judges a run the same after a trip through JSON' {
+        $trip = { param($r) $r | ConvertTo-Json -Depth 6 | ConvertFrom-Json }
+        $control = & $trip (New-Run -Config 'MemEval-12' -TestsTotal 4920)
+        (Check (Run-Criteria (& $trip (New-Run -TestsTotal 0)) $control) 1).Result | Should Be 'Fail'
+        Test-ChecksPass (Run-Criteria (& $trip (New-Run -TestsTotal 4920)) $control) | Should Be $true
     }
     It 'leaves out runs written in an older format' {
         $dir = Join-Path $TestDrive 'old\runs\PC1'

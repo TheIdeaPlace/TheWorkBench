@@ -1,8 +1,9 @@
 # VM memory evaluation
 
-**Status: in progress.** The measuring kit works on both hosts and the idle baseline is done. No
-workload beyond idle has been measured, so there's no sizing recommendation yet. How to run it is in
-[`../eval/README.md`](../eval/README.md).
+**Status: in progress.** The measuring kit has run on both hosts, for the idle workload only. No real
+workload has been measured, so there's no sizing recommendation yet. The figures below are from before
+the kit's review, and those runs don't count towards a result; the baselines get run again. How to run
+it is in [`../eval/README.md`](../eval/README.md).
 
 ## What the VMs have today
 
@@ -40,7 +41,10 @@ That pilot settled for less time than a real run will, and the Surface still nee
 
 ## Changes to the criteria
 
-Made from the idle baseline, before any candidate was judged, as the plan allows.
+Made from the idle baseline, as the plan allows. The 4 GB VM's idle numbers were in view when these were
+chosen, so they aren't independent of it for idle. They were fixed before any real workload ran. The
+review also dropped the "ignore the first 2 minutes" part of criterion 8: the counters start after a
+run's settling time, so it was hiding the workload's own first 2 minutes.
 
 | Criterion | Was | Now | Why |
 |---|---|---|---|
@@ -52,10 +56,11 @@ Made from the idle baseline, before any candidate was judged, as the plan allows
 - A VM's memory settings survive `vmtest begin` restoring its Clean.
 - `VMTEST_POOL` set in the eval's own process works, locally and over remoting, and the pool's own VMs
   and task checkpoints stay as they were.
-- Windows' performance log keeps recording between `vmtest run` calls and costs little.
+- Windows' performance log keeps recording between `vmtest run` calls.
 
 ## Not done yet
 
 - **Measuring what the kit itself costs** needs a workload with a repeatable duration; idle has none.
+- **Showing the criteria catch a real shortage:** the deliberately too-small 2 GB VM hasn't run yet.
 - **Workloads W1 to W9, and running several VMs at once.**
 - **Watching real work for a week:** the scheduled task it needs hasn't been allowed yet.

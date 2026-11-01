@@ -38,8 +38,8 @@ Format-EvalReport -Runs @(Read-EvalRuns)
 
 ## How the VMs stay out of the way
 
-- `VMTEST_POOL` lists the eval VMs only in the eval's own process, so `vmtest begin` from any other
-  session can't be handed one.
+- `VMTEST_POOL` lists the eval VMs only for the eval's own vmtest calls, so `vmtest begin` from
+  anywhere else can't be handed one.
 - Memory settings are stored in each checkpoint, so each eval VM's Clean is taken at its size.
   A run checks the maximum after `begin` and stops if it's wrong.
 - To remove an eval VM, use Hyper-V Manage or `Remove-VM`, and delete its folder under the host's
@@ -48,6 +48,16 @@ Format-EvalReport -Runs @(Read-EvalRuns)
 ## What counts
 
 A run is thrown out, and says why in its record, if it couldn't start, another VM was running, the
-PC dropped below its reserve, the workload was fine but the counters didn't come back, or it was the
-first run on that VM. A workload that **failed** always counts, even with no counters, because
-that may be the memory shortage this is looking for.
+PC's own numbers weren't recorded or it dropped below its reserve, the workload was fine but its
+counters are missing or stopped early, or it was the first clean run on that VM. A workload that
+**failed** counts, even with no counters, because that may be the memory shortage this is looking for.
+
+Missing data never passes. A size needs 3 runs and a healthy Control with the same settings (W6 and W9
+need 1), every criterion it should have measured measured, and no larger size that failed. Runs from an
+older format (`Get-EvalSchema`) stay on disk and are ignored.
+
+The report needs both hosts' runs, so fetch them first:
+
+```powershell
+.\Invoke-OnEvalHost.ps1 -Computer THESTADIUM -CollectRuns
+```

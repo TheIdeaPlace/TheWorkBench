@@ -14,7 +14,9 @@ param(
     [string]$Folder = (Join-Path $env:LOCALAPPDATA 'vmtest\eval\samples'),
     [ValidateRange(1, 3600)][int]$IntervalSeconds = 5,
     [string]$StopFile,
-    [string]$StateDir = (Join-Path $env:LOCALAPPDATA 'vmtest')
+    [string]$StateDir = (Join-Path $env:LOCALAPPDATA 'vmtest'),
+    # 0 means no limit. A run sets one, in case it's killed before it can write the stop file.
+    [int]$MaxMinutes = 0
 )
 
 $ErrorActionPreference = 'Stop'
@@ -42,12 +44,17 @@ function New-Row($Pc, $VM, $DemandMB, $AssignedMB, $StartupMB, $Status, $Holder)
 
 $counters = '\Memory\Available MBytes', '\Memory\Pages Input/sec', '\Processor(_Total)\% Processor Time', '\PhysicalDisk(_Total)\Current Disk Queue Length'
 
+$began = Get-Date
+# A failed reading stays blank, because a 0 would look like a PC that had run out of memory.
+function ConvertTo-Reading($Value, [int]$Digits) { if ($null -eq $Value) { '' } else { [math]::Round([double]$Value, $Digits) } }
+
 while ($true) {
     if ($StopFile -and (Test-Path $StopFile)) { break }
+    if ($MaxMinutes -and ((Get-Date) - $began).TotalMinutes -ge $MaxMinutes) { break }
     $started = Get-Date
     try {
         $values = @{}
-        foreach ($s in (Get-Counter -Counter $counters -ErrorAction SilentlyContinue).CounterSamples) {
+        foreach ($s in (Get-Counter -Counter $counters -ErrorAction Continue 2>$null).CounterSamples) {
             if ($s.Path -like '*\available mbytes') { $values.AvailableMB = $s.CookedValue }
             elseif ($s.Path -like '*\pages input/sec') { $values.PagesInput = $s.CookedValue }
             elseif ($s.Path -like '*% processor time') { $values.CpuPercent = $s.CookedValue }
@@ -55,11 +62,12 @@ while ($true) {
         }
         $pc = [ordered]@{
             Time           = $started.ToString('s')
-            HostAvailableMB = [math]::Round([double]$values.AvailableMB)
-            HostPagesInput = [math]::Round([double]$values.PagesInput, 1)
-            HostCpuPercent = [math]::Round([double]$values.CpuPercent, 1)
-            HostDiskQueue  = [math]::Round([double]$values.DiskQueue, 1)
+            HostAvailableMB = ConvertTo-Reading $values.AvailableMB 0
+            HostPagesInput = ConvertTo-Reading $values.PagesInput 1
+            HostCpuPercent = ConvertTo-Reading $values.CpuPercent 1
+            HostDiskQueue  = ConvertTo-Reading $values.DiskQueue 1
         }
+        if ($null -eq $values.AvailableMB) { Add-Content (Join-Path $Folder "$env:COMPUTERNAME-errors.log") "$((Get-Date).ToString('s')) The PC's counters gave no reading." }
         $running = @(Get-VM | Where-Object { $_.State -eq 'Running' })
         $rows = if ($running) {
             foreach ($vm in $running) {

@@ -38,4 +38,6 @@ $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
 $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
 Register-ScheduledTask -TaskName $name -Action $action -Trigger $trigger -Settings $settings -Principal $principal | Out-Null
 Start-ScheduledTask -TaskName $name
+Start-Sleep -Seconds 2
+if ((Get-ScheduledTask -TaskName $name).State -ne 'Running') { throw "The scheduled task $name didn't start. It needs you to be signed in on this PC." }
 "Watching every $IntervalSeconds s. The rows go in $home_\samples. It restarts when you sign in, and '$($MyInvocation.MyCommand.Name) -Stop' ends it."
