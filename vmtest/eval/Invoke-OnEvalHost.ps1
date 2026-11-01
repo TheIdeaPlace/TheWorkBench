@@ -27,14 +27,28 @@ if (-not $Computer) {
 
 $signIn = Join-Path $env:LOCALAPPDATA "vmtest\hosts\$Computer.xml"
 if (-not (Test-Path $signIn)) { throw "There's no saved sign-in for $Computer. Run 'vmtest host $Computer' once in your own PowerShell window." }
-$session = New-PSSession -ComputerName $Computer -Credential (Import-Clixml $signIn)
+$credential = Import-Clixml $signIn
+# Name resolution for a PC on the local network drops now and then, for a minute or so at a time.
+$session = $null
+foreach ($attempt in 1..6) {
+    try { $session = New-PSSession -ComputerName $Computer -Credential $credential -ErrorAction Stop; break }
+    catch {
+        if ($attempt -eq 6) { throw }
+        Write-Host "Couldn't reach $Computer, trying again in 30 s: $($_.Exception.Message)"
+        Start-Sleep -Seconds 30
+    }
+}
 try {
     if ($CollectRuns) {
-        $mine = Join-Path $env:LOCALAPPDATA "vmtest\eval\runs\$Computer"
+        # By the PC's own name, which is what its folder is called, whatever name reached it here.
+        $found = Invoke-Command -Session $session -ScriptBlock {
+            $dir = Join-Path $env:LOCALAPPDATA "vmtest\eval\runs\$env:COMPUTERNAME"
+            [pscustomobject]@{ Name = $env:COMPUTERNAME; Files = @(Get-ChildItem $dir -Filter *.json -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }) }
+        }
+        $mine = Join-Path $env:LOCALAPPDATA "vmtest\eval\runs\$($found.Name)"
         New-Item $mine -ItemType Directory -Force | Out-Null
-        $theirs = Invoke-Command -Session $session -ArgumentList $Computer -ScriptBlock { param($c) Join-Path $env:LOCALAPPDATA "vmtest\eval\runs\$c" }
-        Copy-Item (Join-Path $theirs '*') -Destination $mine -FromSession $session -Force
-        "Copied $Computer's runs to $mine."
+        foreach ($file in @($found.Files)) { Copy-Item $file -Destination $mine -FromSession $session -Force }
+        "Copied $(@($found.Files).Count) runs from $($found.Name) to $mine. A run removed there stays here until it's removed here too."
         return
     }
     $target = Invoke-Command -Session $session -ScriptBlock {

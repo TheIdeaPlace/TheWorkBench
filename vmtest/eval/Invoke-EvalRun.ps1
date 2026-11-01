@@ -10,12 +10,15 @@ running, since the times couldn't be compared and a 12 GB VM could crowd out rea
 
 The first clean run ever recorded on a VM counts as warm-up and is marked thrown out. So is a run
 where another VM started, the PC dropped below its reserve, or a fine workload's counters are
-incomplete. A workload that failed always counts. Exits non-zero if the VM couldn't be handed back.
+incomplete. A workload that failed counts, unless another VM or a full PC could explain it. Exits
+non-zero if the VM couldn't be handed back.
 
 A workload script takes -Vt, -VtOk and -Arguments, and returns exactly one object with an integer
-exitCode, plus any of testsTotal, failedTests, speech, latency and limits. Anything else counts as
-the workload failing, so a script that forgets to capture a command's output can't turn a failure into
-a pass.
+exitCode, plus any of testsTotal, failedTests, speech (failed, misplaced, audioGaps), latency (medianMs,
+worstMs) and limits (name, limit, actual). Anything else counts as the workload failing, so a script
+that forgets to capture a command's output can't turn a failure into a pass. exitCode says the workload
+ran to the end, so 0 even if a test failed: what the tests found goes in failedTests. Control has to
+exit 0, or nothing can be judged against it.
 #>
 [CmdletBinding()]
 param(
@@ -82,7 +85,7 @@ $record = [ordered]@{
     durationSeconds = $null; exitCode = $null; testsTotal = $null; failedTests = @(); speech = $null; latency = $null; limits = @()
     guest = $null; guestEvents = $null; topProcesses = @(); pagefileGrewMB = 0
     hostMinAvailableMB = $null; hostPeakCpuPercent = $null; otherVMsRunning = @(); vmMemoryStatusWarningSeconds = $null; peakDemandMB = $null; peakAssignedMB = $null
-    discarded = $false; discardReason = ''; notes = @()
+    discarded = $false; discardReason = ''; notes = @(); troubled = $false
 }
 
 try {
@@ -94,6 +97,8 @@ try {
     $memory = Get-VMMemory -VMName $Config
     $record.memory = [ordered]@{ minGB = $memory.Minimum / 1GB; startupGB = $memory.Startup / 1GB; maxGB = $memory.Maximum / 1GB; dynamic = [bool]$memory.DynamicMemoryEnabled }
     $record.cleanFrom = "$($live.Notes)"
+    # A VM remade from a newer Clean is a different Windows, so it isn't compared with the older one.
+    if ($record.cleanFrom -match 'Clean ([0-9a-fA-F-]{36})') { $record.setup += ";clean=$($Matches[1])" }
     if ($memory.Maximum -ne $size.MaxGB * 1GB -or $memory.Startup -ne $size.StartupGB * 1GB -or $memory.Minimum -ne $size.MinGB * 1GB -or -not $memory.DynamicMemoryEnabled) {
         throw "$Config is $($memory.Minimum / 1GB) / $($memory.Startup / 1GB) / $($memory.Maximum / 1GB) GB after 'begin', not $($size.MinGB) / $($size.StartupGB) / $($size.MaxGB) GB. This run would measure the wrong size; run New-EvalVMs.ps1 again."
     }
@@ -183,11 +188,18 @@ $earlier = @(Get-ChildItem $runDir -Filter "*-$Config-*.json" -ErrorAction Silen
             $e.schema -eq (Get-EvalSchema) -and $e.guest
         } catch { $false }
     })
-$reason = Get-RunDiscardReason -Started $workloadStarted -ExitCode ([int]$record.exitCode) -HasCounters (Test-CountersComplete $record.guest ([double]$record.durationSeconds)) `
-    -OtherVMs @($record.otherVMsRunning) -HostMinAvailableMB $record.hostMinAvailableMB -HasHostRows ($NoCounters -or $samples.Count -gt 0) -ReserveGB $ReserveGB `
+$complete = Test-CountersComplete $record.guest ([double]$record.durationSeconds)
+# The PC's readings have to span the run, or "no other VM ran" only holds for the part they cover.
+$readingTimes = @($samples | Where-Object { "$($_.HostAvailableMB)" -ne '' } | ForEach-Object { [datetime]$_.Time } | Sort-Object)
+$hostCovered = if ($readingTimes.Count -ge 2) { ($readingTimes[-1] - $readingTimes[0]).TotalSeconds } else { 0 }
+$hostCovers = $hostCovered -ge [double]$record.durationSeconds * (Get-EvalThresholds).CountersCoverage
+$reason = Get-RunDiscardReason -Started $workloadStarted -ExitCode ([int]$record.exitCode) -HasCounters $complete `
+    -OtherVMs @($record.otherVMsRunning) -HostMinAvailableMB $record.hostMinAvailableMB -HasHostRows ($NoCounters -or $hostCovers) -ReserveGB $ReserveGB `
     -FirstOnVM (($earlier.Count -eq 0) -and (-not $KeepWarmup)) -StartError $startError
 if ($NoCounters -and $workloadStarted) { $reason = 'Overhead check, with the counters off.' }
 $record.discardReason = $reason
+# These get thrown out, but a size that keeps having them may be short of memory, so they're counted.
+$record.troubled = (-not $NoCounters) -and $beginTried -and ((-not $workloadStarted) -or (-not $record.otherVMsRunning -and [int]$record.exitCode -eq 0 -and -not $complete))
 $record.discarded = [bool]$reason
 
 $file = Join-Path $runDir "$Workload-$Config-$Repeat-$(Get-Date -Format yyyyMMddHHmmss).json"

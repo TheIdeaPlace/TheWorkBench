@@ -48,12 +48,17 @@ Format-EvalReport -Runs @(Read-EvalRuns)
 ## What counts
 
 A run is thrown out, and says why in its record, if it couldn't start, another VM was running, the
-PC's own numbers weren't recorded or it dropped below its reserve, the workload was fine but its
+PC's own numbers don't cover it or it dropped below its reserve, the workload was fine but its
 counters are missing or stopped early, or it was the first clean run on that VM. A workload that
-**failed** counts, even with no counters, because that may be the memory shortage this is looking for.
+**failed** counts, even with no counters, unless another VM or a full PC could explain it, because
+that may be the memory shortage this is looking for.
 
-Missing data never passes. A size needs 3 runs and a healthy Control with the same settings (W6 and W9
-need 1), every criterion it should have measured measured, and no larger size that failed. Runs from an
+Missing data never passes. A size needs 3 runs and a healthy Control with the same settings and the
+same Clean (W6 and W9 need 1), every criterion it should have measured measured, and no trouble at a
+larger size. A size with more runs that wouldn't start or lost their counters than Control had isn't
+judged, because retrying until enough come back clean mustn't read as passing.
+
+A workload script says what it must return at the top of `Invoke-EvalRun.ps1`. Runs from an
 older format (`Get-EvalSchema`) stay on disk and are ignored.
 
 The report needs both hosts' runs, so fetch them first:

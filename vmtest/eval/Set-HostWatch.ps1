@@ -26,7 +26,7 @@ if ($Stop) {
     return
 }
 
-# A copy of its own, because C:\vmtest-eval is replaced each time a run is started from another PC.
+# A copy of its own, because the folder a call from another PC runs from is removed when it ends.
 New-Item $home_ -ItemType Directory -Force | Out-Null
 Copy-Item (Join-Path $PSScriptRoot 'Measure-Host.ps1') $script -Force
 if ($existing) { Stop-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue; Unregister-ScheduledTask -TaskName $name -Confirm:$false }

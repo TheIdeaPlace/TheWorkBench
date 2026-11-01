@@ -120,7 +120,13 @@ Describe 'summing up a run' {
 }
 
 Describe 'whether counters speak for the whole workload' {
-    $good = [pscustomobject]@{ LowAvailableSeconds = 0; PagingSeconds = 0; PeakCommitPercent = 50; CoveredSeconds = 600 }
+    $good = [pscustomobject]@{ LowAvailableSeconds = 0; PagingSeconds = 0; PeakCommitPercent = 50; CoveredSeconds = 600; AvailableSamples = 120; PagingSamples = 119; CommitSamples = 120 }
+    It 'refuses a log that spans the workload on a handful of readings' {
+        Test-CountersComplete ([pscustomobject]@{ LowAvailableSeconds = 0; PagingSeconds = 0; PeakCommitPercent = 50; CoveredSeconds = 600; AvailableSamples = 3; PagingSamples = 3; CommitSamples = 3 }) 600 | Should Be $false
+    }
+    It 'refuses a log where one measure is mostly blank' {
+        Test-CountersComplete ([pscustomobject]@{ LowAvailableSeconds = 0; PagingSeconds = 0; PeakCommitPercent = 50; CoveredSeconds = 600; AvailableSamples = 120; PagingSamples = 1; CommitSamples = 120 }) 600 | Should Be $false
+    }
     It 'accepts a log as long as the workload' { Test-CountersComplete $good 600 | Should Be $true }
     It 'refuses a log that stopped early' { Test-CountersComplete $good 1800 | Should Be $false }
     It 'refuses a log of blanks' {
@@ -177,6 +183,25 @@ Describe 'the criteria' {
         It 'doesn''t pass when a soak''s counters stopped short of Control''s' {
             (Check (Run-Criteria (New-Run) (New-Run -Config 'MemEval-12' -SoakGrowthGB 0)) 10).Result | Should Be 'Incomplete'
         }
+        It 'doesn''t pass a measure this workload must have, when Control lost it too' {
+            $checks = Test-EvalCriteria -Candidate @((New-Run)) -Control @((New-Run -Config 'MemEval-12')) -MaxGB 4 -Required 2
+            (Check $checks 2).Result | Should Be 'Incomplete'
+            Test-ChecksPass $checks | Should Be $false
+        }
+        It 'treats a limit with no time, a step never reached, as Incomplete' {
+            $none = [pscustomobject]@{ name = 'x'; limit = 30; actual = $null }
+            (Check (Run-Criteria (New-Run -Limits @($none)) (New-Run -Config 'MemEval-12' -Limits @([pscustomobject]@{ name = 'x'; limit = 30; actual = 5 }))) 4).Result | Should Be 'Incomplete'
+        }
+        It 'treats a limit Control had and this lacks as Incomplete' {
+            $other = [pscustomobject]@{ name = 'other'; limit = 30; actual = 1 }
+            (Check (Run-Criteria (New-Run -Limits @($other)) (New-Run -Config 'MemEval-12' -Limits @([pscustomobject]@{ name = 'x'; limit = 30; actual = 5 }))) 4).Result | Should Be 'Incomplete'
+        }
+        It 'treats latency with a field missing as not having it' {
+            (Check (Run-Criteria (New-Run -Latency ([pscustomobject]@{ worstMs = 1 })) (New-Run -Config 'MemEval-12' -Latency ([pscustomobject]@{ medianMs = 1; worstMs = 1 }))) 6).Result | Should Be 'Incomplete'
+        }
+        It 'treats speech with a field missing as not having it' {
+            (Check (Run-Criteria (New-Run -Speech ([pscustomobject]@{ failed = @() })) (New-Run -Config 'MemEval-12' -Speech ([pscustomobject]@{ failed = @(); misplaced = 0; audioGaps = 0 }))) 2).Result | Should Be 'Incomplete'
+        }
         It 'treats a soak growth of exactly 0 as measured' {
             (Check (Run-Criteria (New-Run -SoakGrowthGB 0) (New-Run -Config 'MemEval-12' -SoakGrowthGB 0)) 10).Result | Should Be 'Pass'
         }
@@ -196,6 +221,11 @@ Describe 'the criteria' {
         }
         It 'never lets a died run match a Control that died' {
             (Check (Run-Criteria (New-Run -ExitCode -1) (New-Run -Config 'MemEval-12' -ExitCode -1)) 1).Result | Should Be 'Fail'
+        }
+        It 'fails a test that fails more often than in Control, even if Control failed it once' {
+            $runs = 1..3 | ForEach-Object { New-Run -FailedTests 'T1' }
+            $once = @((New-Run -Config 'MemEval-12' -FailedTests 'T1'), (New-Run -Config 'MemEval-12'), (New-Run -Config 'MemEval-12'))
+            (Check (Run-Criteria $runs $once) 1).Detail | Should Match 'more often than in Control: T1'
         }
         It 'fails a run with no exit code' {
             $none = New-Run
@@ -345,7 +375,8 @@ Describe 'whether a run counts' {
     It 'throws out a run while another VM was running' { Why -OtherVMs 'ClaudeTesting' | Should Match 'ClaudeTesting' }
     It 'throws out a run when the PC went below its reserve' { Why -HostMin 3000 | Should Match 'reserve' }
     It 'throws out a run with no host rows, since nothing shows another VM wasn''t running' { Why -HasHostRows $false | Should Match 'own numbers' }
-    It 'counts a failed first run, because a failure always counts' { Why -ExitCode 1 -FirstOnVM $true | Should Be '' }
+    It 'counts a failed first run, because a failure counts' { Why -ExitCode 1 -FirstOnVM $true | Should Be '' }
+    It 'counts a failed run even when the PC''s numbers are missing' { Why -ExitCode 1 -HasHostRows $false | Should Be '' }
     It 'throws out the first run on a VM as warm-up' { Why -FirstOnVM $true | Should Match 'warm-up' }
 }
 
@@ -374,6 +405,35 @@ Describe 'the smallest passing size' {
         $null -eq $r.SmallestGB | Should Be $true
         $r.OutOfOrder | Should Be $true
     }
+    It 'holds back a size whose failures came at an unjudged larger size' {
+        $r = Get-WorkloadResult -Runs (@($control) + @(1..2 | ForEach-Object { New-Run -Config 'MemEval-8' -ExitCode -1 }) + @(Three 'MemEval-4')) -Workload 'W7' -HostName 'PC1'
+        $null -eq $r.SmallestGB | Should Be $true
+        $r.OutOfOrder | Should Be $true
+    }
+    It 'holds back a size that lost its counters more often than Control' {
+        $lost = 1..2 | ForEach-Object { $x = New-Run -Discarded; $x | Add-Member troubled $true; $x }
+        $r = Get-WorkloadResult -Runs (@($control) + @($lost) + @(Three 'MemEval-4')) -Workload 'W7' -HostName 'PC1'
+        $null -eq $r.SmallestGB | Should Be $true
+        $r.Sizes[0].Reason | Should Match 'lost their counters'
+    }
+    It 'judges nothing against a Control that exited non-zero' {
+        $bad = @((New-Run -Config 'MemEval-12'), (New-Run -Config 'MemEval-12'), (New-Run -Config 'MemEval-12' -ExitCode 1))
+        $r = Get-WorkloadResult -Runs (@($bad) + @(Three 'MemEval-4' 1)) -Workload 'W7' -HostName 'PC1'
+        $null -eq $r.SmallestGB | Should Be $true
+        $r.ControlProblem | Should Match 'non-zero'
+    }
+    It 'judges nothing against a Control whose test counts disagree' {
+        $bad = @((New-Run -Config 'MemEval-12' -TestsTotal 10), (New-Run -Config 'MemEval-12' -TestsTotal 10), (New-Run -Config 'MemEval-12' -TestsTotal 0))
+        (Get-WorkloadResult -Runs (@($bad) + @(Three 'MemEval-4')) -Workload 'W7' -HostName 'PC1').ControlProblem | Should Match 'disagree'
+    }
+    It 'judges nothing against a Control that ran no tests' {
+        $bad = 1..3 | ForEach-Object { New-Run -Config 'MemEval-12' -TestsTotal 0 }
+        (Get-WorkloadResult -Runs (@($bad) + @(Three 'MemEval-4')) -Workload 'W7' -HostName 'PC1').ControlProblem | Should Match 'no tests'
+    }
+    It 'doesn''t pass a soak too short to measure growth' {
+        $r = Get-WorkloadResult -Runs @((New-Run -Workload 'W9' -Config 'MemEval-12'), (New-Run -Workload 'W9')) -Workload 'W9' -HostName 'PC1'
+        $null -eq $r.SmallestGB | Should Be $true
+    }
     It 'takes the size above the failure when there is one' {
         $r = Get-WorkloadResult -Runs (@($control) + @(Three 'MemEval-8') + @(Three 'MemEval-6' 1) + @(Three 'MemEval-4')) -Workload 'W7' -HostName 'PC1'
         $r.SmallestGB | Should Be 8
@@ -389,7 +449,8 @@ Describe 'the smallest passing size' {
         $r.ControlRuns | Should Be 1
     }
     It 'accepts one run each for the workloads the plan runs once' {
-        $r = Get-WorkloadResult -Runs @((New-Run -Workload 'W9' -Config 'MemEval-12'), (New-Run -Workload 'W9')) -Workload 'W9' -HostName 'PC1'
+        $s = [pscustomobject]@{ failed = @(); misplaced = 0; audioGaps = 0 }
+        $r = Get-WorkloadResult -Runs @((New-Run -Workload 'W9' -Config 'MemEval-12' -SoakGrowthGB 0 -Speech $s), (New-Run -Workload 'W9' -SoakGrowthGB 0 -Speech $s)) -Workload 'W9' -HostName 'PC1'
         $r.SmallestGB | Should Be 4
     }
     It 'judges nothing when every Control run died, whatever the size did' {
@@ -482,6 +543,13 @@ Describe 'the decision' {
     It 'says the size isn''t final until the soak has passed there' {
         (Get-EvalDecision -Hosts PC1, PC2 -Results @(All 4 4)).Notes -join ' ' | Should Match 'soak hasn''t passed'
     }
+    It 'says the soak isn''t passed when it failed at the chosen size' {
+        $results = @(All 6 6) + (New-Result 'W9' 'PC1' $null) + (New-Result 'W9' 'PC2' 4)
+        (Get-EvalDecision -Hosts PC1, PC2 -Results $results).Notes -join ' ' | Should Match 'soak hasn''t passed at 6 GB or below on PC1'
+    }
+    It 'says when the hosts need different sizes, in the notes the report prints' {
+        (Get-EvalDecision -Hosts PC1, PC2 -Results (@(All 4 4 'PC1') + @(All 8 8 'PC2'))).Notes -join ' ' | Should Match 'PC1 4 GB, PC2 8 GB'
+    }
     It 'says when no run has shown the criteria catching a shortage' {
         (Get-EvalDecision -Hosts PC1, PC2 -Results @(All 4 4)).Notes -join ' ' | Should Match 'catching a real shortage'
     }
@@ -529,6 +597,20 @@ Describe 'the report' {
     It 'says None when nothing failed' {
         $runs = @(1..3 | ForEach-Object { New-Run -Config 'MemEval-12' }) + (New-Run)
         (Format-EvalReport -Runs $runs -Hosts PC1 -MinRuns 1) -join "`n" | Should Match 'None\.'
+    }
+    It 'says so when there are no runs yet, rather than failing' {
+        (Format-EvalReport -Runs @()) -join "`n" | Should Match 'No runs'
+    }
+    It 'lists what wasn''t measured' {
+        $runs = @(1..3 | ForEach-Object { New-Run -Config 'MemEval-12' }) + (New-Run)
+        (Format-EvalReport -Runs $runs -Hosts PC1 -MinRuns 1) -join "`n" | Should Match 'Same speech'
+    }
+    It 'carries on past a run it can''t read' {
+        $dir = Join-Path $TestDrive 'bad\runs\PC1'
+        New-Item $dir -ItemType Directory -Force | Out-Null
+        Set-Content (Join-Path $dir 'broken.json') '{ not json'
+        New-Run | Add-Member -PassThru schema (Get-EvalSchema) | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $dir 'good.json') -Encoding UTF8
+        @(Read-EvalRuns -Root (Join-Path $TestDrive 'bad') 3>$null).Count | Should Be 1
     }
     It 'uses plain sentences, not a table a screen reader reads as bars' {
         $runs = @(1..3 | ForEach-Object { New-Run -Config 'MemEval-12' }) + (New-Run)
