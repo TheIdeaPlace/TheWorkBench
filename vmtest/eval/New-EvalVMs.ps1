@@ -4,10 +4,12 @@ Make the eval VMs on this PC, each with its own memory settings and its own Clea
 
 .DESCRIPTION
 They're copies from the pool's first VM's Clean, made by 'vmtest prepare -Pool' with VMTEST_POOL set
-only for those calls, so 'vmtest begin' from anywhere else never sees them. Memory settings are kept
-in each checkpoint, so each VM is turned off, given its size, and then prepared again, which replaces
-the copy's Clean with one taken at that size. A note on the VM records that this finished, so a
-failure halfway is put right by running this again.
+only for those calls, so 'vmtest begin' from anywhere else never sees them. Memory settings are kept in each checkpoint, so each VM is turned off,
+given its size, and then prepared again, which replaces the copy's Clean with one taken at that size.
+A note on the VM records that this finished, so a failure halfway is put right by running this again.
+
+They're set not to start with the PC. Hyper-V would otherwise bring them back after a restart, and
+they'd sit there using memory with nobody knowing.
 
 Run this on the PC that has the VMs. It changes nothing about the pool's own VMs, and it leaves alone
 an eval VM a run is using.
@@ -44,6 +46,7 @@ foreach ($c in $wanted) {
 vtOk prepare -Pool
 
 foreach ($c in $wanted) {
+    Set-VM -Name $c.Name -AutomaticStartAction Nothing
     $sized = "Sized $($c.MinGB)/$($c.StartupGB)/$($c.MaxGB) GB"
     $vm = Get-VM -Name $c.Name
     if ("$($vm.Notes)".Contains($sized)) {

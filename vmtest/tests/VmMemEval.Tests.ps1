@@ -365,6 +365,47 @@ Describe 'a run with no counters' {
     }
 }
 
+Describe 'a suite that sometimes stops early' {
+    function Full([string]$config) { New-Run -Config $config -TestsTotal 5932 }
+    function Short([string]$config) { New-Run -Config $config -TestsTotal 1828 }
+    $fullControl = 1..3 | ForEach-Object { Full 'MemEval-12' }
+    It 'judges only the full runs, so an early stop at Control is not a problem' {
+        $runs = @($fullControl) + (Short 'MemEval-12') + @(1..3 | ForEach-Object { Full 'MemEval-4' })
+        $r = Get-WorkloadResult -Runs $runs -Workload 'W7' -HostName 'PC1'
+        $r.ControlProblem | Should Be ''
+        $r.SmallestGB | Should Be 4
+    }
+    It 'tolerates one early stop more than Control' {
+        $runs = @($fullControl) + @(1..3 | ForEach-Object { Full 'MemEval-4' }) + (Short 'MemEval-4')
+        (Get-WorkloadResult -Runs $runs -Workload 'W7' -HostName 'PC1').SmallestGB | Should Be 4
+    }
+    It 'holds a size back when it stops early more often than that' {
+        $runs = @($fullControl) + @(1..3 | ForEach-Object { Full 'MemEval-4' }) + (Short 'MemEval-4') + (Short 'MemEval-4')
+        $r = Get-WorkloadResult -Runs $runs -Workload 'W7' -HostName 'PC1'
+        $null -eq $r.SmallestGB | Should Be $true
+        $r.Sizes[0].Reason | Should Match 'stopped early'
+    }
+    It 'still needs 3 full runs, however many short ones there are' {
+        $runs = @($fullControl) + @(1..2 | ForEach-Object { Full 'MemEval-4' })
+        $null -eq (Get-WorkloadResult -Runs $runs -Workload 'W7' -HostName 'PC1').SmallestGB | Should Be $true
+    }
+    It 'keeps a run that died, because that is a failure and not a short run' {
+        $runs = @($fullControl) + @(1..3 | ForEach-Object { Full 'MemEval-4' }) + (New-Run -ExitCode -1)
+        (Get-WorkloadResult -Runs $runs -Workload 'W7' -HostName 'PC1').Sizes[0].Pass | Should Be $false
+    }
+    It 'treats a different count as a real difference in any other workload' {
+        $w2 = @(1..3 | ForEach-Object { New-Run -Workload 'W2' -Config 'MemEval-12' -TestsTotal 50 }) + @(1..3 | ForEach-Object { New-Run -Workload 'W2' -TestsTotal 40 })
+        (Get-WorkloadResult -Runs $w2 -Workload 'W2' -HostName 'PC1').Sizes[0].Pass | Should Be $false
+    }
+    It 'does not count a VM that had not been made as trouble at that size' {
+        $never = New-Run -Config 'MemEval-8' -Discarded
+        $never.discardReason = "The run couldn't start: vmtest begin failed: 'MemEval-8' isn't one of the test VMs ready to use"
+        $never | Add-Member troubled $true
+        $runs = @($fullControl) + $never + @(1..3 | ForEach-Object { Full 'MemEval-4' })
+        (Get-WorkloadResult -Runs $runs -Workload 'W7' -HostName 'PC1').SmallestGB | Should Be 4
+    }
+}
+
 Describe 'whether a run counts' {
     function Why { param([bool]$Started = $true, [int]$ExitCode = 0, [bool]$HasCounters = $true, [string[]]$OtherVMs = @(), $HostMin = 20000, [bool]$FirstOnVM = $false, [bool]$HasHostRows = $true)
         Get-RunDiscardReason -Started $Started -ExitCode $ExitCode -HasCounters $HasCounters -OtherVMs $OtherVMs -HostMinAvailableMB $HostMin -HasHostRows $HasHostRows -FirstOnVM $FirstOnVM -StartError 'boom' }
@@ -423,8 +464,8 @@ Describe 'the smallest passing size' {
         $r.ControlProblem | Should Match 'non-zero'
     }
     It 'judges nothing against a Control whose test counts disagree' {
-        $bad = @((New-Run -Config 'MemEval-12' -TestsTotal 10), (New-Run -Config 'MemEval-12' -TestsTotal 10), (New-Run -Config 'MemEval-12' -TestsTotal 0))
-        (Get-WorkloadResult -Runs (@($bad) + @(Three 'MemEval-4')) -Workload 'W7' -HostName 'PC1').ControlProblem | Should Match 'disagree'
+        $bad = @((New-Run -Workload 'W2' -Config 'MemEval-12' -TestsTotal 10), (New-Run -Workload 'W2' -Config 'MemEval-12' -TestsTotal 10), (New-Run -Workload 'W2' -Config 'MemEval-12' -TestsTotal 0))
+        (Get-WorkloadResult -Runs @($bad) -Workload 'W2' -HostName 'PC1').ControlProblem | Should Match 'disagree'
     }
     It 'judges nothing against a Control that ran no tests' {
         $bad = 1..3 | ForEach-Object { New-Run -Config 'MemEval-12' -TestsTotal 0 }
@@ -559,6 +600,100 @@ Describe 'the decision' {
     }
     It 'doesn''t when they need the same' {
         (Get-EvalDecision -Hosts PC1, PC2 -Results @(All 6 6)).HostsDiffer | Should Be $false
+    }
+}
+
+Describe 'what a workload script reports' {
+    It 'reads the results from the WORKLOAD line' {
+        $r = ConvertFrom-WorkloadOutput @('noise', 'WORKLOAD {"ran":true,"total":4920,"failed":["A","B"],"problems":[]}', 'Exit code 0')
+        $r.exitCode | Should Be 0
+        $r.testsTotal | Should Be 4920
+        @($r.failedTests).Count | Should Be 2
+    }
+    It 'counts no WORKLOAD line as the workload failing, and says what came back' {
+        $r = ConvertFrom-WorkloadOutput @('The credential is invalid')
+        $r.exitCode | Should Be -1
+        $r.problem | Should Match 'credential'
+    }
+    It 'counts a script that says it could not run as failing' {
+        $r = ConvertFrom-WorkloadOutput @('WORKLOAD {"ran":false,"total":0,"failed":[],"problems":["no results"]}')
+        $r.exitCode | Should Be -1
+        $r.problem | Should Match 'no results'
+    }
+    It 'keeps a run with no failed tests as zero of them' {
+        @((ConvertFrom-WorkloadOutput @('WORKLOAD {"ran":true,"total":5,"failed":[],"problems":[]}')).failedTests).Count | Should Be 0
+    }
+}
+
+Describe 'reading a test results file' {
+    $Projects = $null
+    . (Join-Path $root 'eval\guest\Measure-DotnetTests.ps1')
+    It 'gives the count and the failures' {
+        $trx = Join-Path $TestDrive 'r.trx'
+        Set-Content $trx '<TestRun xmlns="http://example"><Results><UnitTestResult testName="Good" outcome="Passed" /><UnitTestResult testName="Bad" outcome="Failed" /></Results><ResultSummary><Counters total="2" /></ResultSummary></TestRun>'
+        $r = Read-TrxResult $trx
+        $r.Total | Should Be 2
+        @($r.Failed) -join ',' | Should Be 'Bad'
+    }
+    It 'copes with a run where nothing failed' {
+        $trx = Join-Path $TestDrive 'ok.trx'
+        Set-Content $trx '<TestRun><Results><UnitTestResult testName="Good" outcome="Passed" /></Results><ResultSummary><Counters total="1" /></ResultSummary></TestRun>'
+        @((Read-TrxResult $trx).Failed).Count | Should Be 0
+    }
+}
+
+Describe 'reading a speech take' {
+    $Reader = $null
+    . (Join-Path $root 'eval\guest\Measure-SpeechTake.ps1')
+    It 'reads the clock, the log position and each key from the key log' {
+        $k = Read-KeyLog @("0`tclock`t10:00:00.000`t2026-11-04", "0`tlogpos`t500", "100`tstart`trecording", "2000`tk`t%f`t3", "5500`tk`t{DOWN}`t5", "9000`tend`trecording")
+        $k.Zero | Should Be 36000
+        $k.LogPosition | Should Be 500
+        @($k.Keys) -join ',' | Should Be '2,5.5'
+    }
+    It 'reads when NVDA spoke, and ignores what it did not' {
+        $times = @(Read-SpeechTimes @(
+                "IO - speech.speech.speak (10:00:02.500) - MainThread (1):",
+                "Speaking ['File', 'menu']",
+                "IO - inputCore (10:00:03.000) - x (2):",
+                "Input: kb(desktop):alt+f",
+                "IO - speech.speech.speak (10:00:04.000) - MainThread (1):",
+                "Speaking [LangChangeCommand ('en_US')]"))
+        @($times).Count | Should Be 1
+        $times[0] | Should Be 36002.5
+    }
+    It 'measures key press to first speech, step by step' {
+        $m = Measure-Speech -KeySeconds 2, 5.5 -SpeechSeconds 2.25, 2.75, 5.75
+        $m.MedianMs | Should Be 250
+        @($m.Failed).Count | Should Be 0
+    }
+    It 'names a step where nothing was said' {
+        @((Measure-Speech -KeySeconds 2, 5.5, 9 -SpeechSeconds 2.25, 9.5).Failed) -join ',' | Should Be 'step 2 silent'
+    }
+    It 'counts speech that came after the step was over as misplaced' {
+        (Measure-Speech -KeySeconds 2, 20 -SpeechSeconds 6, 20.1 -StepSeconds 3.5).Misplaced | Should Be 1
+    }
+    It 'gives no latency, not a good one, when nothing was said at all' {
+        $null -eq (Measure-Speech -KeySeconds 2 -SpeechSeconds @()).MedianMs | Should Be $true
+    }
+    It 'reads a recording''s length from its header' {
+        $wav = Join-Path $TestDrive 'a.wav'
+        $bytes = New-Object byte[] (44 + 3000)
+        [BitConverter]::GetBytes([int]1000).CopyTo($bytes, 28)
+        [IO.File]::WriteAllBytes($wav, $bytes)
+        Get-WavSeconds $wav | Should Be 3
+    }
+}
+
+Describe 'what a speech or install workload reports' {
+    It 'passes speech, latency and limits through' {
+        $r = ConvertFrom-WorkloadOutput @('WORKLOAD {"ran":true,"speech":{"failed":[],"misplaced":0,"audioGaps":0},"latency":{"medianMs":300,"worstMs":900},"limits":[{"name":"first window 1","limit":60,"actual":12.5}],"problems":[]}')
+        $r.speech.misplaced | Should Be 0
+        $r.latency.medianMs | Should Be 300
+        @($r.limits)[0].actual | Should Be 12.5
+    }
+    It 'gives no limits, not a null one, when there are none' {
+        @((ConvertFrom-WorkloadOutput @('WORKLOAD {"ran":true,"problems":[]}')).limits).Count | Should Be 0
     }
 }
 

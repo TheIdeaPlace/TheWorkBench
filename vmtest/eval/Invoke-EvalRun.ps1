@@ -33,7 +33,10 @@ param(
     [switch]$KeepWarmup,
     # For checking what measuring costs: the same run with the counters and sampler off. It's
     # recorded for that comparison and never counts as a result.
-    [switch]$NoCounters
+    [switch]$NoCounters,
+    # VMs that are someone else's and stay running, such as an always-on Ubuntu VM. They're recorded on
+    # each run as background load, and don't stop or spoil it.
+    [string[]]$AllowRunning = @()
 )
 
 $ErrorActionPreference = 'Stop'
@@ -46,10 +49,10 @@ $size = Get-EvalConfigs | Where-Object Name -eq $Config
 $workloadScript = Get-ChildItem (Join-Path $PSScriptRoot 'workloads') -Filter "$Workload-*.ps1" | Select-Object -First 1
 if (-not $workloadScript) { throw "There's no workload script for '$Workload' in $PSScriptRoot\workloads." }
 
-$running = @(Get-VM | Where-Object { $_.State -eq 'Running' } | ForEach-Object Name)
+$running = @(Get-VM | Where-Object { $_.State -eq 'Running' -and $AllowRunning -notcontains $_.Name } | ForEach-Object Name)
 if ($running.Count) { throw "$($running -join ', ') running on this PC, so a run now couldn't be compared with the others. Try again when it's free." }
 
-$pool = @('ClaudeTesting') + @(Get-EvalConfigs | ForEach-Object Name)
+$pool = @(Get-EvalConfigs | ForEach-Object Name)
 $task = @{ Repo = 'MemEval'; Branch = "$Workload-$Config-$Repeat" }
 
 # vmtest on the eval VM, with its output and exit code returned.
@@ -81,7 +84,7 @@ $record = [ordered]@{
     startedAt = (Get-Date).ToString('o'); settleSeconds = $SettleSeconds
     # Only runs with the same setup are compared. A 3-minute pilot says nothing beside a 10-minute run.
     setup = "settle=$SettleSeconds;$argumentText"
-    cleanFrom = ''; memory = $null
+    cleanFrom = ''; memory = $null; backgroundVMs = @($AllowRunning)
     durationSeconds = $null; exitCode = $null; testsTotal = $null; failedTests = @(); speech = $null; latency = $null; limits = @()
     guest = $null; guestEvents = $null; topProcesses = @(); pagefileGrewMB = 0
     hostMinAvailableMB = $null; hostPeakCpuPercent = $null; otherVMsRunning = @(); vmMemoryStatusWarningSeconds = $null; peakDemandMB = $null; peakAssignedMB = $null
@@ -98,7 +101,9 @@ try {
     $record.memory = [ordered]@{ minGB = $memory.Minimum / 1GB; startupGB = $memory.Startup / 1GB; maxGB = $memory.Maximum / 1GB; dynamic = [bool]$memory.DynamicMemoryEnabled }
     $record.cleanFrom = "$($live.Notes)"
     # A VM remade from a newer Clean is a different Windows, so it isn't compared with the older one.
-    if ($record.cleanFrom -match 'Clean ([0-9a-fA-F-]{36})') { $record.setup += ";clean=$($Matches[1])" }
+    # Each VM's own Clean has its own id, so this is the pool Clean they were all copied from.
+    $cleanId = if ($record.cleanFrom -match 'Clean ([0-9a-fA-F-]{36})') { $Matches[1] } else { 'unknown' }
+    $record.setup += ";clean=$cleanId;rigged=$($record.cleanFrom -match ' Rigged\.')"
     if ($memory.Maximum -ne $size.MaxGB * 1GB -or $memory.Startup -ne $size.StartupGB * 1GB -or $memory.Minimum -ne $size.MinGB * 1GB -or -not $memory.DynamicMemoryEnabled) {
         throw "$Config is $($memory.Minimum / 1GB) / $($memory.Startup / 1GB) / $($memory.Maximum / 1GB) GB after 'begin', not $($size.MinGB) / $($size.StartupGB) / $($size.MaxGB) GB. This run would measure the wrong size; run New-EvalVMs.ps1 again."
     }
@@ -127,6 +132,7 @@ try {
         foreach ($k in 'exitCode', 'testsTotal', 'failedTests', 'speech', 'latency', 'limits') {
             if ($result.PSObject.Properties[$k]) { $record[$k] = $result.$k }
         }
+        if ($result.PSObject.Properties['problem'] -and $result.problem) { $record.notes += "The workload reported: $($result.problem)" }
     }
 
     if (-not $NoCounters) {
@@ -177,7 +183,7 @@ if ($samples.Count) {
         $record.peakAssignedMB = (@($mine | ForEach-Object { [double]$_.AssignedMB }) | Measure-Object -Maximum).Maximum
         $record.vmMemoryStatusWarningSeconds = @($mine | Where-Object { $_.Status -match 'Warning|Low' }).Count * 5
     }
-    $record.otherVMsRunning = @($samples | Where-Object { $_.VM -and $_.VM -ne $Config } | ForEach-Object VM | Sort-Object -Unique)
+    $record.otherVMsRunning = @($samples | Where-Object { $_.VM -and $_.VM -ne $Config -and $AllowRunning -notcontains $_.VM } | ForEach-Object VM | Sort-Object -Unique)
 }
 
 # Warm-up counts only real measured runs in this format. One that can't be read just doesn't count,
@@ -199,7 +205,7 @@ $reason = Get-RunDiscardReason -Started $workloadStarted -ExitCode ([int]$record
 if ($NoCounters -and $workloadStarted) { $reason = 'Overhead check, with the counters off.' }
 $record.discardReason = $reason
 # These get thrown out, but a size that keeps having them may be short of memory, so they're counted.
-$record.troubled = (-not $NoCounters) -and $beginTried -and ((-not $workloadStarted) -or (-not $record.otherVMsRunning -and [int]$record.exitCode -eq 0 -and -not $complete))
+$record.troubled = (-not $NoCounters) -and $beginTried -and (((-not $workloadStarted) -and $startError -notmatch "isn't one of the test VMs") -or (-not $record.otherVMsRunning -and [int]$record.exitCode -eq 0 -and -not $complete))
 $record.discarded = [bool]$reason
 
 $file = Join-Path $runDir "$Workload-$Config-$Repeat-$(Get-Date -Format yyyyMMddHHmmss).json"

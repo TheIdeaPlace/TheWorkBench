@@ -93,6 +93,50 @@ function Invoke-EvalVmTest {
     }
 }
 
+# A workload that sends a guest script: what the script's WORKLOAD line says, as Invoke-EvalRun wants it.
+# The exit code says the workload ran to the end, so a run with no such line, or one that says it
+# couldn't, is the workload failing, whatever vmtest's own exit code was.
+function ConvertFrom-WorkloadOutput {
+    param([object[]]$Output)
+    $line = @($Output | Where-Object { "$_".StartsWith('WORKLOAD ') } | Select-Object -Last 1)
+    if ($line.Count -eq 0) { return [pscustomobject]@{ exitCode = -1; problem = "No WORKLOAD line came back. Last output: $(@($Output | Select-Object -Last 4) -join ' ')" } }
+    $w = "$($line[0])".Substring(9) | ConvertFrom-Json
+    [pscustomobject]@{
+        exitCode    = if ($w.ran) { 0 } else { -1 }
+        testsTotal  = $w.total
+        failedTests = @($w.failed | Where-Object { $_ })
+        speech      = $w.speech
+        latency     = $w.latency
+        limits      = @($w.limits | Where-Object { $_ })
+        problem     = (@($w.problems | Where-Object { $_ }) -join '; ')
+    }
+}
+
+# Send the speech script with its settings on the front, and read what it says.
+function Invoke-EvalSpeechWorkload {
+    param([Parameter(Mandatory)]$Vt, [Parameter(Mandatory)][string]$Template, [Parameter(Mandatory)][hashtable]$Settings, [int]$TimeoutSeconds = 1800)
+    $script = Join-Path $env:TEMP "memeval-speech-$PID-$([guid]::NewGuid()).ps1"
+    $front = @($Settings.Keys | ForEach-Object {
+            $v = $Settings[$_]
+            if ($v -is [bool]) { "`$$_ = `$$("$v".ToLower())" } elseif ($v -is [string]) { "`$$_ = '$v'" } else { "`$$_ = $v" }
+        })
+    Set-Content $script -Encoding ASCII -Value (@($front) + (Get-Content $Template -Raw))
+    try { $r = & $Vt run -ScriptFile $script -Timeout $TimeoutSeconds }
+    finally { Remove-Item $script -ErrorAction SilentlyContinue }
+    ConvertFrom-WorkloadOutput $r.Output
+}
+
+# Send the dotnet test script with its list of projects on the front, and read what it says.
+function Invoke-EvalDotnetWorkload {
+    param([Parameter(Mandatory)]$Vt, [Parameter(Mandatory)][string[]]$Projects, [Parameter(Mandatory)][string]$Template, [int]$TimeoutSeconds = 1800)
+    $script = Join-Path $env:TEMP "memeval-dotnet-$PID-$([guid]::NewGuid()).ps1"
+    $list = '$Projects = @(' + (($Projects | ForEach-Object { "'$_'" }) -join ', ') + ')'
+    Set-Content $script -Encoding ASCII -Value @($list, (Get-Content $Template -Raw))
+    try { $r = & $Vt run -ScriptFile $script -Timeout $TimeoutSeconds }
+    finally { Remove-Item $script -ErrorAction SilentlyContinue }
+    ConvertFrom-WorkloadOutput $r.Output
+}
+
 # ---- reading what a run recorded ----------------------------------------------------------------
 
 function ConvertTo-Number($Text) {
@@ -231,6 +275,30 @@ function Get-RunDiscardReason {
     if (-not $HasCounters) { return "The workload finished but its counters are missing or stopped early, so it says nothing about memory." }
     if ($FirstOnVM) { return 'First run on this VM, kept as warm-up.' }
     ''
+}
+
+# QuickMail's suite sometimes stops early and still reports no failures and exit 0, even with 12 GB on
+# offer. For a workload that does that, only full runs are compared, and how often each size stops early
+# is compared separately. A run that died stays in, because that's a failure and not a short run.
+function Test-EvalStopsEarly { param([string]$Workload) $Workload -eq 'W7' }
+
+# Why a size can't be judged, not a sign of trouble at that size: the eval VM hadn't been made.
+function Test-RunNeverHadVM { param($Run) "$($Run.discardReason)" -match "isn't one of the test VMs" }
+
+# The runs a size is judged on.
+function Select-CountedRun {
+    param([object[]]$Runs, [string]$Workload, [string]$Config, [string]$HostName)
+    $valid = @(Select-ValidRun $Runs $Workload $Config $HostName)
+    if (-not (Test-EvalStopsEarly $Workload)) { return $valid }
+    $full = Get-EvalFullTestCount $Runs $Workload $HostName
+    @($valid | Where-Object { [int]$_.exitCode -ne 0 -or $null -eq $_.testsTotal -or [int]$_.testsTotal -eq $full })
+}
+
+# A full run's test count: the most any run of this workload on this host managed.
+function Get-EvalFullTestCount {
+    param([object[]]$Runs, [string]$Workload, [string]$HostName)
+    $counts = @(Select-ValidRun $Runs $Workload '' $HostName | Where-Object { $null -ne $_.testsTotal } | ForEach-Object { [int]$_.testsTotal })
+    if ($counts.Count) { ($counts | Measure-Object -Maximum).Maximum } else { 0 }
 }
 
 # Runs that count: not thrown out, and of this workload, size and host.
@@ -455,28 +523,38 @@ function Get-ControlProblem {
 function Get-WorkloadResult {
     param([Parameter(Mandatory)][object[]]$Runs, [Parameter(Mandatory)][string]$Workload, [Parameter(Mandatory)][string]$HostName, $Thresholds = (Get-EvalThresholds), [int]$MinRuns = 0)
     if (-not $MinRuns) { $MinRuns = Get-EvalMinRuns $Workload $Thresholds }
-    $control = @(Select-ValidRun $Runs $Workload 'MemEval-12' $HostName)
+    $control = @(Select-CountedRun $Runs $Workload 'MemEval-12' $HostName)
     $controlProblem = Get-ControlProblem $control $MinRuns
+    $shortAt = {
+        param([string]$config)
+        @(Select-ValidRun $Runs $Workload $config $HostName).Count - @(Select-CountedRun $Runs $Workload $config $HostName).Count
+    }
+    $controlShort = & $shortAt 'MemEval-12'
     $troubledAt = {
         param([string]$config)
-        @($Runs | Where-Object { $_.troubled -and $_.workload -eq $Workload -and $_.config -eq $config -and $_.host -eq $HostName }).Count
+        @($Runs | Where-Object { $_.troubled -and $_.workload -eq $Workload -and $_.config -eq $config -and $_.host -eq $HostName -and -not (Test-RunNeverHadVM $_) }).Count
     }
     $controlTroubled = & $troubledAt 'MemEval-12'
     $sizes = @(foreach ($c in Get-EvalConfigs | Where-Object { $_.Role -ne 'Control' }) {
-            $sizeRuns = @(Select-ValidRun $Runs $Workload $c.Name $HostName)
+            $sizeRuns = @(Select-CountedRun $Runs $Workload $c.Name $HostName)
             $troubled = & $troubledAt $c.Name
-            if ($sizeRuns.Count -eq 0 -and $troubled -eq 0) { continue }
+            $short = & $shortAt $c.Name
+            if ($sizeRuns.Count -eq 0 -and $troubled -eq 0 -and $short -eq 0) { continue }
             $setups = @(@($control) + @($sizeRuns) | ForEach-Object { "$($_.setup)" } | Sort-Object -Unique)
             $reason =
                 # Retrying until enough runs come back clean mustn't read as passing.
                 if ($troubled -gt $controlTroubled) { "$troubled of its runs failed to start or lost their counters, against $controlTroubled at Control, which may be the shortage itself." }
+                # One more than Control, because these are rare enough that one is noise and more isn't.
+                elseif ($short -gt $controlShort + 1) { "$short of its runs stopped early, against $controlShort at Control, which may be the shortage itself." }
                 elseif ($controlProblem) { $controlProblem }
-                elseif ($sizeRuns.Count -lt $MinRuns) { "It has $($sizeRuns.Count) of the $MinRuns runs it needs." }
+                # The too-small VM only has to fail, and one failure shows that. A pass there still counts
+                # against the criteria, so one run decides it either way.
+                elseif ($c.Role -ne 'TooSmall' -and $sizeRuns.Count -lt $MinRuns) { "It has $($sizeRuns.Count) of the $MinRuns runs it needs." }
                 elseif ($setups.Count -gt 1) { 'Its runs and Control''s used different settings, so they can''t be compared.' }
                 else { '' }
             if ($reason) {
                 $badRuns = @($sizeRuns | Where-Object { [int]$_.exitCode -ne 0 -or ($_.guestEvents -and [int]$_.guestEvents.exhaustion -gt 0) }).Count
-                [pscustomobject]@{ Config = $c.Name; MaxGB = $c.MaxGB; Role = $c.Role; Runs = $sizeRuns.Count; Pass = $null; Reason = $reason; Checks = @(); Trouble = ($badRuns -gt 0 -or $troubled -gt $controlTroubled) }
+                [pscustomobject]@{ Config = $c.Name; MaxGB = $c.MaxGB; Role = $c.Role; Runs = $sizeRuns.Count; Pass = $null; Reason = $reason; Checks = @(); Trouble = ($badRuns -gt 0 -or $troubled -gt $controlTroubled -or $short -gt $controlShort + 1) }
             } else {
                 $checks = @(Test-EvalCriteria -Candidate $sizeRuns -Control $control -MaxGB $c.MaxGB -Thresholds $Thresholds -Required (Get-EvalRequiredMeasures $Workload))
                 $pass = Test-ChecksPass $checks
@@ -499,6 +577,7 @@ function Get-WorkloadResult {
         Host            = $HostName
         ControlRuns     = $control.Count
         ControlProblem  = $controlProblem
+        ControlShort    = $controlShort
         PeakGB          = if ($peaks.Count) { ($peaks | Measure-Object -Maximum).Maximum } else { $null }
         Sizes           = $sizes
         OutOfOrder      = $outOfOrder
@@ -618,6 +697,6 @@ function Format-EvalReport {
     foreach ($p in $Thresholds.PSObject.Properties) { "- $($p.Name): $($p.Value)" }
 }
 
-Export-ModuleMember -Function Get-EvalConfigs, Get-EvalHosts, Get-EvalThresholds, Get-EvalMinRuns, Get-EvalRequiredMeasures, Get-EvalDataRoot, Get-EvalSchema, Invoke-EvalVmTest, ConvertFrom-CounterCsv,
-    Get-LongestRunSeconds, Get-Slope, Get-Median, Get-CounterSummary, Test-CountersComplete, Get-RunDiscardReason, Select-ValidRun, Test-EvalCriteria, Test-ChecksPass,
+Export-ModuleMember -Function Get-EvalConfigs, Get-EvalHosts, Get-EvalThresholds, Get-EvalMinRuns, Get-EvalRequiredMeasures, Get-EvalDataRoot, Get-EvalSchema, Invoke-EvalVmTest, ConvertFrom-WorkloadOutput, Invoke-EvalDotnetWorkload, Invoke-EvalSpeechWorkload, ConvertFrom-CounterCsv,
+    Get-LongestRunSeconds, Get-Slope, Get-Median, Get-CounterSummary, Test-CountersComplete, Get-RunDiscardReason, Select-ValidRun, Select-CountedRun, Test-EvalStopsEarly, Test-RunNeverHadVM, Get-EvalFullTestCount, Test-EvalCriteria, Test-ChecksPass,
     Get-ControlProblem, Get-WorkloadResult, Get-EvalDecision, Read-EvalRuns, Format-EvalReport
