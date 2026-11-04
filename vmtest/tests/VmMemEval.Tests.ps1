@@ -269,6 +269,18 @@ Describe 'the criteria' {
             $base = New-Run -Config 'MemEval-12' -Speech ([pscustomobject]@{ failed = @('step 60 silent'); misplaced = 0; audioGaps = 0 })
             (Check (Run-Criteria (New-Run -Speech ([pscustomobject]@{ failed = @('step 3 silent'); misplaced = 0; audioGaps = 0 })) $base) 2).Detail | Should Match 'tour position 3'
         }
+        It 'passes a stray silent step in one run of three' {
+            $base = New-Run -Config 'MemEval-12' -Speech ([pscustomobject]@{ failed = @('step 15 silent'); misplaced = 0; audioGaps = 0 })
+            $clean = [pscustomobject]@{ failed = @('step 15 silent'); misplaced = 0; audioGaps = 0 }
+            $stray = [pscustomobject]@{ failed = @('step 1 silent', 'step 15 silent'); misplaced = 0; audioGaps = 0 }
+            (Check (Run-Criteria @((New-Run -Speech $stray), (New-Run -Speech $clean), (New-Run -Speech $clean)) $base) 2).Result | Should Be 'Pass'
+        }
+        It 'fails a place that goes silent in most runs and never at Control' {
+            $base = New-Run -Config 'MemEval-12' -Speech ([pscustomobject]@{ failed = @('step 15 silent'); misplaced = 0; audioGaps = 0 })
+            $clean = [pscustomobject]@{ failed = @('step 15 silent'); misplaced = 0; audioGaps = 0 }
+            $stray = [pscustomobject]@{ failed = @('step 1 silent', 'step 15 silent'); misplaced = 0; audioGaps = 0 }
+            (Check (Run-Criteria @((New-Run -Speech $stray), (New-Run -Speech $stray), (New-Run -Speech $clean)) $base) 2).Detail | Should Match 'tour position 1'
+        }
         It 'fails far more silent steps than Control, even at places Control goes silent' {
             $base = New-Run -Config 'MemEval-12' -Speech ([pscustomobject]@{ failed = @('step 15 silent', 'step 16 silent'); misplaced = 0; audioGaps = 0 })
             $many = 1..8 | ForEach-Object { "step $(15 + 16 * $_) silent" }

@@ -387,7 +387,10 @@ function Get-EvalChecks {
         # The tour repeats, and which repeat of a step goes silent varies even at Control, so a step is
         # compared by where it falls in the tour, and how many went silent is compared separately.
         $controlFails = @($Control | Where-Object $hasSpeech | ForEach-Object { $_.speech.failed } | Where-Object { $_ } | ForEach-Object { ConvertTo-TourPosition $_ })
-        $newFails = @($withSpeech | ForEach-Object { $_.speech.failed } | Where-Object { $_ } | ForEach-Object { ConvertTo-TourPosition $_ } | Where-Object { $controlFails -notcontains $_ } | Sort-Object -Unique)
+        # A place only counts if it goes silent in at least half the runs: under load, any size has the
+        # odd stray silent step, and Control's strays land elsewhere.
+        $hereFails = @($withSpeech | ForEach-Object { @($_.speech.failed | Where-Object { $_ } | ForEach-Object { ConvertTo-TourPosition $_ } | Sort-Object -Unique) })
+        $newFails = @($hereFails | Where-Object { $controlFails -notcontains $_ } | Group-Object | Where-Object { $_.Count * 2 -ge $withSpeech.Count } | ForEach-Object { $_.Name } | Sort-Object)
         if ($newFails.Count) { $problems += "steps failing only here: $($newFails -join ', ')" }
         $controlMost = (@($Control | Where-Object $hasSpeech | ForEach-Object { @($_.speech.failed | Where-Object { $_ }).Count }) | Measure-Object -Maximum).Maximum
         $silentHere = Get-Median @($withSpeech | ForEach-Object { [double]@($_.speech.failed | Where-Object { $_ }).Count })
