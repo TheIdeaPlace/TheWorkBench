@@ -33,7 +33,10 @@ function Get-EvalHosts { 'SURFACEPRO7', 'THESTADIUM' }
 function Get-EvalThresholds {
     [pscustomobject]@{
         MinRuns             = 3      # runs needed at a size, Control included, before it can pass
-        SilentStepsAllowance = 2     # criterion 2: silent steps beyond Control's most
+        # Criterion 2: silent steps beyond Control's most, whichever is larger. Two soaks at Control alone
+        # had 210 and 234, about 11% apart, so a fixed number only suits a short tour.
+        SilentStepsAllowance = 2
+        SilentStepsPercent  = 10
         TaskTimePercent     = 10     # criterion 5
         LatencyMedianPercent = 10    # criterion 6
         LatencyMedianMs     = 100
@@ -399,7 +402,8 @@ function Get-EvalChecks {
         if ($newFails.Count) { $problems += "steps failing only here: $($newFails -join ', ')" }
         $controlMost = (@($Control | Where-Object $hasSpeech | ForEach-Object { @($_.speech.failed | Where-Object { $_ }).Count }) | Measure-Object -Maximum).Maximum
         $silentHere = Get-Median @($withSpeech | ForEach-Object { [double]@($_.speech.failed | Where-Object { $_ }).Count })
-        if ($silentHere -gt $controlMost + $t.SilentStepsAllowance) { $problems += "$silentHere steps silent, against at most $controlMost at Control" }
+        $silentAllowed = $controlMost + [math]::Max($t.SilentStepsAllowance, $controlMost * $t.SilentStepsPercent / 100.0)
+        if ($silentHere -gt $silentAllowed) { $problems += "$silentHere steps silent, against at most $controlMost at Control" }
         # Per run, against Control's: with a build going alongside, Control has these too, and then they
         # aren't about memory. Where Control is clean, one is a fail.
         $controlSpeech = @($Control | Where-Object $hasSpeech)
