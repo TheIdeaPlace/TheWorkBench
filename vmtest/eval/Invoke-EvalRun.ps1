@@ -23,7 +23,7 @@ exit 0, or nothing can be judged against it.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$Workload,
-    [Parameter(Mandatory)][ValidateSet('MemEval-12', 'MemEval-8', 'MemEval-6', 'MemEval-4', 'MemEval-2')][string]$Config,
+    [Parameter(Mandatory)][ValidateSet('MemEval-12', 'MemEval-8', 'MemEval-6', 'MemEval-4', 'MemEval-2', 'MemEval-4a', 'MemEval-4b', 'MemEval-4c')][string]$Config,
     [Parameter(Mandatory)][int]$Repeat,
     [string]$ToolPath,
     [ValidateRange(0, 1800)][int]$SettleSeconds = 120,

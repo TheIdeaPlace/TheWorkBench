@@ -16,6 +16,11 @@ function Get-EvalConfigs {
         [pscustomobject]@{ Name = 'MemEval-6'; MinGB = 2; StartupGB = 4; MaxGB = 6; Role = 'Candidate' }
         [pscustomobject]@{ Name = 'MemEval-4'; MinGB = 2; StartupGB = 4; MaxGB = 4; Role = 'Candidate' }
         [pscustomobject]@{ Name = 'MemEval-2'; MinGB = 2; StartupGB = 2; MaxGB = 2; Role = 'TooSmall' }
+        # For running several at once at the finalist size. Their runs are never judged against Control:
+        # they answer how many a PC can run, not how small one can be.
+        [pscustomobject]@{ Name = 'MemEval-4a'; MinGB = 2; StartupGB = 4; MaxGB = 4; Role = 'Together' }
+        [pscustomobject]@{ Name = 'MemEval-4b'; MinGB = 2; StartupGB = 4; MaxGB = 4; Role = 'Together' }
+        [pscustomobject]@{ Name = 'MemEval-4c'; MinGB = 2; StartupGB = 4; MaxGB = 4; Role = 'Together' }
     )
 }
 
@@ -560,7 +565,7 @@ function Get-WorkloadResult {
         @($Runs | Where-Object { $_.troubled -and $_.workload -eq $Workload -and $_.config -eq $config -and $_.host -eq $HostName -and -not (Test-RunNeverHadVM $_) }).Count
     }
     $controlTroubled = & $troubledAt 'MemEval-12'
-    $sizes = @(foreach ($c in Get-EvalConfigs | Where-Object { $_.Role -ne 'Control' }) {
+    $sizes = @(foreach ($c in Get-EvalConfigs | Where-Object { $_.Role -in 'Candidate', 'TooSmall' }) {
             $sizeRuns = @(Select-CountedRun $Runs $Workload $c.Name $HostName)
             $troubled = & $troubledAt $c.Name
             $short = & $shortAt $c.Name
@@ -661,6 +666,40 @@ function Get-EvalDecision {
     [pscustomobject]@{ DefaultGB = $default; HeavyGB = $heavy; PerHost = $perHost; HostsDiffer = $known.Count -gt 1; Answer = $answer; Notes = $notes }
 }
 
+# ---- several VMs at once ------------------------------------------------------------------------
+
+# Whether a PC can run this many VMs at once, from one go's runs and the PC's own numbers. Criteria 11 and
+# 14 of the plan; 12 (whether 'begin' refuses one) is that a run couldn't start. Criterion 13, time in
+# Hyper-V's Warning status, isn't used: a 4 GB VM at its limit is in Warning for most of a run even alone,
+# with no harm done. Slowdown is reported, with the PC's CPU beside it.
+function Test-TogetherRuns {
+    param([Parameter(Mandatory)][object[]]$Runs, [double]$ReserveGB = 4, [hashtable]$AloneSeconds = @{}, [double]$CpuBusyPercent = 90)
+    $problems = @()
+    $notStarted = @($Runs | Where-Object { $null -eq $_.durationSeconds })
+    if ($notStarted.Count) { $problems += "$($notStarted.Count) VM(s) couldn't start or finish: $(($notStarted | ForEach-Object { "$($_.config): $($_.discardReason)" }) -join '; ')" }
+    $started = @($Runs | Where-Object { $null -ne $_.durationSeconds })
+    $died = @($started | Where-Object { [int]$_.exitCode -ne 0 })
+    if ($died.Count) { $problems += "$($died.Count) workload(s) failed: $(($died | ForEach-Object { "$($_.workload) on $($_.config)" }) -join ', ')" }
+    $lows = @($Runs | ForEach-Object { $_.hostMinAvailableMB } | Where-Object { $null -ne $_ })
+    $lowest = if ($lows.Count) { ($lows | Measure-Object -Minimum).Minimum } else { $null }
+    if ($null -eq $lowest) { $problems += "The PC's own numbers weren't recorded." }
+    elseif ($lowest -lt $ReserveGB * 1024) { $problems += "The PC dropped to $lowest MB available, under its $ReserveGB GB reserve." }
+    $cpus = @($Runs | ForEach-Object { $_.hostPeakCpuPercent } | Where-Object { $null -ne $_ })
+    $peakCpu = if ($cpus.Count) { ($cpus | Measure-Object -Maximum).Maximum } else { $null }
+    $slowdowns = @(foreach ($r in $started) {
+            $alone = $AloneSeconds[$r.workload]
+            if ($alone) { [pscustomobject]@{ Workload = $r.workload; Ratio = [math]::Round([double]$r.durationSeconds / $alone, 2) } }
+        })
+    [pscustomobject]@{
+        Pass       = ($problems.Count -eq 0)
+        Problems   = $problems
+        LowestHostMB = $lowest
+        PeakCpu    = $peakCpu
+        CpuBusy    = ($null -ne $peakCpu -and $peakCpu -ge $CpuBusyPercent)
+        Slowdowns  = $slowdowns
+    }
+}
+
 # ---- the report ---------------------------------------------------------------------------------
 
 function Read-EvalRuns {
@@ -724,4 +763,4 @@ function Format-EvalReport {
 
 Export-ModuleMember -Function Get-EvalConfigs, Get-EvalHosts, Get-EvalThresholds, Get-EvalMinRuns, Get-EvalRequiredMeasures, Get-EvalDataRoot, Get-EvalSchema, Invoke-EvalVmTest, ConvertFrom-WorkloadOutput, Invoke-EvalDotnetWorkload, Invoke-EvalSpeechWorkload, ConvertFrom-CounterCsv,
     Get-LongestRunSeconds, Get-Slope, Get-Median, Get-CounterSummary, Test-CountersComplete, Get-RunDiscardReason, Select-ValidRun, Select-CountedRun, Test-EvalStopsEarly, Test-RunNeverHadVM, Get-EvalFullTestCount, Test-EvalCriteria, Test-ChecksPass,
-    Get-ControlProblem, Get-WorkloadResult, Get-EvalDecision, Read-EvalRuns, Format-EvalReport
+    Get-ControlProblem, Get-WorkloadResult, Test-TogetherRuns, Get-EvalDecision, Read-EvalRuns, Format-EvalReport

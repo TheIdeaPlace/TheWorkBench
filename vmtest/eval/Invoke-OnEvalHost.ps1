@@ -13,7 +13,7 @@ see both hosts.
 #>
 [CmdletBinding(DefaultParameterSetName = 'Run')]
 param(
-    [Parameter(Mandatory, ParameterSetName = 'Run')][ValidateSet('New-EvalVMs', 'Install-EvalRig', 'Invoke-EvalRun', 'Invoke-EvalMatrix', 'Set-HostWatch')][string]$Script,
+    [Parameter(Mandatory, ParameterSetName = 'Run')][ValidateSet('New-EvalVMs', 'Install-EvalRig', 'Invoke-EvalRun', 'Invoke-EvalMatrix', 'Invoke-EvalTogether', 'Set-HostWatch')][string]$Script,
     [Parameter(ParameterSetName = 'Run')][hashtable]$Parameters = @{},
     [Parameter(ParameterSetName = 'Run')][Parameter(Mandatory, ParameterSetName = 'Collect')][string]$Computer,
     [Parameter(Mandatory, ParameterSetName = 'Collect')][switch]$CollectRuns,

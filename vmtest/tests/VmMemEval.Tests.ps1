@@ -27,7 +27,12 @@ Describe 'the sizes under test' {
         $control[0].MaxGB | Should Be (($configs | Measure-Object MaxGB -Maximum).Maximum)
     }
     It 'names each VM for its maximum, so a result can never be misread' {
-        foreach ($c in Get-EvalConfigs) { $c.Name | Should Be "MemEval-$($c.MaxGB)" }
+        foreach ($c in Get-EvalConfigs) { $c.Name | Should Match "^MemEval-$($c.MaxGB)[a-c]?$" }
+    }
+    It 'never judges the VMs for running together against Control' {
+        $together = New-Run -Config 'MemEval-4a'
+        $control = 1..3 | ForEach-Object { New-Run -Config 'MemEval-12' }
+        @((Get-WorkloadResult -Runs (@($control) + $together) -Workload 'W7' -HostName 'PC1').Sizes).Count | Should Be 0
     }
     It 'never starts or floors a VM above its maximum' {
         foreach ($c in Get-EvalConfigs) {
@@ -441,6 +446,36 @@ Describe 'a suite that sometimes stops early' {
         $never | Add-Member troubled $true
         $runs = @($fullControl) + $never + @(1..3 | ForEach-Object { Full 'MemEval-4' })
         (Get-WorkloadResult -Runs $runs -Workload 'W7' -HostName 'PC1').SmallestGB | Should Be 4
+    }
+}
+
+Describe 'several VMs at once' {
+    function Together([string]$config, [string]$workload = 'W7', $duration = 400, [int]$exit = 0, $hostMin = 8000, $cpu = 70) {
+        [pscustomobject]@{ config = $config; workload = $workload; durationSeconds = $duration; exitCode = $exit; hostMinAvailableMB = $hostMin; hostPeakCpuPercent = $cpu; discardReason = 'x'; vmMemoryStatusWarningSeconds = 300; maxGB = 4 }
+    }
+    It 'passes when everything finished and the PC kept its reserve' {
+        (Test-TogetherRuns -Runs @((Together 'a'), (Together 'b'))).Pass | Should Be $true
+    }
+    It 'is not failed by a 4 GB VM sitting at its limit, which it does alone too' {
+        (Test-TogetherRuns -Runs @((Together 'a'))).Problems.Count | Should Be 0
+    }
+    It 'fails when the PC went under its reserve, using the lowest of any VM''s view' {
+        (Test-TogetherRuns -Runs @((Together 'a'), (Together 'b' -hostMin 3000))).Problems -join ' ' | Should Match 'reserve'
+    }
+    It 'fails when a workload died' {
+        (Test-TogetherRuns -Runs @((Together 'a' -exit -1))).Pass | Should Be $false
+    }
+    It 'fails when a VM could not start' {
+        (Test-TogetherRuns -Runs @((Together 'a' -duration $null))).Problems -join ' ' | Should Match 'start or finish'
+    }
+    It 'fails when the PC''s numbers are missing' {
+        (Test-TogetherRuns -Runs @((Together 'a' -hostMin $null))).Pass | Should Be $false
+    }
+    It 'gives the slowdown against running alone' {
+        ((Test-TogetherRuns -Runs @((Together 'a' -duration 700)) -AloneSeconds @{ W7 = 350 }).Slowdowns)[0].Ratio | Should Be 2
+    }
+    It 'says when the CPU was close to full' {
+        (Test-TogetherRuns -Runs @((Together 'a' -cpu 99))).CpuBusy | Should Be $true
     }
 }
 
