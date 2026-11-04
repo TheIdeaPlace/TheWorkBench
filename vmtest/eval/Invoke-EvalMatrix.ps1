@@ -14,13 +14,18 @@ param(
     [string[]]$AllowRunning = @(),
     [switch]$TooSmall,
     [string]$ToolPath,
-    [int]$MaxExtraRuns = 3
+    [int]$MaxExtraRuns = 3,
+    # Stops between runs after this long, so whatever started it can't kill it partway through a run and
+    # strand a VM. 0 means no limit. Run it again to carry on.
+    [int]$MaxMinutes = 0
 )
 
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'VmMemEval.psm1') -Force
 $me = $env:COMPUTERNAME
 $runScript = Join-Path $PSScriptRoot 'Invoke-EvalRun.ps1'
+$began = Get-Date
+function Test-OutOfTime { $MaxMinutes -and ((Get-Date) - $began).TotalMinutes -ge $MaxMinutes }
 
 function Get-Runs { @(Read-EvalRuns | Where-Object { $_.host -eq $me }) }
 function Get-Counted([string]$W, [string]$C) { @(Select-CountedRun (Get-Runs) $W $C $me).Count }
@@ -38,6 +43,16 @@ function Initialize-Size([string]$C) {
 
 # One run in its own process, so one failing can't take the rest with it.
 function Invoke-One([string]$W, [string]$C) {
+    # Other work on this PC comes first. A run can't start beside it, so wait quietly for it to finish.
+    $waited = 0
+    while ($true) {
+        $busy = @(Get-VM | Where-Object { $_.State -eq 'Running' -and $AllowRunning -notcontains $_.Name } | ForEach-Object Name)
+        if (-not $busy.Count) { break }
+        if ($waited -eq 0) { Write-Host "$((Get-Date).ToString('HH:mm:ss')) Waiting for $($busy -join ', ') to finish." }
+        if ($waited -ge 240) { throw "$($busy -join ', ') has been running for 4 hours, so this is stopping. Run it again when the PC is free." }
+        Start-Sleep -Seconds 60
+        $waited++
+    }
     $repeat = (Get-Tried $W $C) + 1
     $allow = if ($AllowRunning.Count) { "-AllowRunning $(($AllowRunning | ForEach-Object { "'$_'" }) -join ',')" } else { '' }
     $tool = if ($ToolPath) { "-ToolPath '$ToolPath'" } else { '' }
@@ -62,6 +77,7 @@ function Complete-Sizes([string]$W, [string[]]$Sizes, [int]$Need) {
         $next = @($Sizes | Where-Object { (Get-Counted $W $_) -lt $Need -and (Get-Tried $W $_) -lt $limit } |
             Sort-Object { Get-Counted $W $_ } | Select-Object -First 1)
         if (-not $next.Count) { break }
+        if (Test-OutOfTime) { Write-Host "Stopping after $MaxMinutes minutes. Run this again to carry on."; exit 0 }
         [void](Invoke-One $W $next[0])
     }
 }

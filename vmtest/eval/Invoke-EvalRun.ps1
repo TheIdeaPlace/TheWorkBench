@@ -201,7 +201,7 @@ $hostCovered = if ($readingTimes.Count -ge 2) { ($readingTimes[-1] - $readingTim
 $hostCovers = $hostCovered -ge [double]$record.durationSeconds * (Get-EvalThresholds).CountersCoverage
 $reason = Get-RunDiscardReason -Started $workloadStarted -ExitCode ([int]$record.exitCode) -HasCounters $complete `
     -OtherVMs @($record.otherVMsRunning) -HostMinAvailableMB $record.hostMinAvailableMB -HasHostRows ($NoCounters -or $hostCovers) -ReserveGB $ReserveGB `
-    -FirstOnVM (($earlier.Count -eq 0) -and (-not $KeepWarmup)) -StartError $startError
+    -FirstOnVM (($earlier.Count -eq 0) -and (-not $KeepWarmup) -and (@($record.failedTests).Count -eq 0)) -StartError $startError
 if ($NoCounters -and $workloadStarted) { $reason = 'Overhead check, with the counters off.' }
 $record.discardReason = $reason
 # These get thrown out, but a size that keeps having them may be short of memory, so they're counted.

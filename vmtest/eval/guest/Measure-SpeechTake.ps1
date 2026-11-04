@@ -127,6 +127,7 @@ if ($AlongsideBuild) {
 $takeFailed = -not (Test-Path 'C:\vmtest\rec\tour.keys.txt')
 if ($build -and -not $build.WaitForExit(600000)) { $problems += 'the build alongside was still going 10 minutes after the take'; Stop-Process -Id $build.Id -Force -ErrorAction SilentlyContinue }
 Get-Process QuickMail, Narrator, nvda -ErrorAction SilentlyContinue | Stop-Process -Force
+Start-Sleep -Seconds 2
 
 if ($takeFailed) { 'WORKLOAD ' + (@{ ran = $false; problems = @('the take left no key log') } | ConvertTo-Json -Compress); exit 0 }
 
@@ -139,8 +140,10 @@ $speech = [ordered]@{ failed = @(); misplaced = 0; audioGaps = $(if ($short -gt 
 $latency = $null
 if ($Reader -eq 'NVDA') {
     $keys = Read-KeyLog $keyLines
-    $bytes = [IO.File]::ReadAllBytes($logFile)
-    $text = [Text.Encoding]::UTF8.GetString($bytes, [math]::Min($keys.LogPosition, $bytes.Length), $bytes.Length - [math]::Min($keys.LogPosition, $bytes.Length))
+    # With sharing allowed, because NVDA's log can't be read any other way while it's still open.
+    $stream = [IO.File]::Open($logFile, 'Open', 'Read', 'ReadWrite, Delete')
+    try { $buffer = New-Object IO.MemoryStream; $stream.CopyTo($buffer); $bytes = $buffer.ToArray() } finally { $stream.Close() }
+    $text =[Text.Encoding]::UTF8.GetString($bytes, [math]::Min($keys.LogPosition, $bytes.Length), $bytes.Length - [math]::Min($keys.LogPosition, $bytes.Length))
     $spoken = @(Read-SpeechTimes ($text -split "`r?`n") | ForEach-Object { $_ - $keys.Zero })
     $m = Measure-Speech -KeySeconds $keys.Keys -SpeechSeconds $spoken -StepSeconds $StepSeconds
     "$($keys.Keys.Count) keys, $($spoken.Count) utterances, $($m.Failed.Count) silent, median $($m.MedianMs) ms"
