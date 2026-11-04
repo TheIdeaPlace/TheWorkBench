@@ -63,6 +63,7 @@ function Invoke-One([string]$W, [string]$C) {
         $busy = @(Get-VM | Where-Object { $_.State -eq 'Running' -and $AllowRunning -notcontains $_.Name } | ForEach-Object Name)
         if (-not $busy.Count) { break }
         if ($waited -eq 0) { Write-Host "$((Get-Date).ToString('HH:mm:ss')) Waiting for $($busy -join ', ') to finish." }
+        if (Test-OutOfTime) { Write-Host "Stopping after $MaxMinutes minutes, still waiting for $($busy -join ', '). Run this again to carry on."; exit 0 }
         if ($waited -ge 240) { throw "$($busy -join ', ') has been running for 4 hours, so this is stopping. Run it again when the PC is free." }
         Start-Sleep -Seconds 60
         $waited++

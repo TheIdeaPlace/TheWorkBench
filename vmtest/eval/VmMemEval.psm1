@@ -525,6 +525,10 @@ function Get-ControlProblem {
     $counts = @($Control | ForEach-Object { $_.testsTotal } | Where-Object { $null -ne $_ } | Sort-Object -Unique)
     if ($counts.Count -gt 1) { return "Control's runs disagree on how many tests ran: $($counts -join ', ')." }
     if ($counts.Count -and $counts[0] -eq 0) { return 'Control ran no tests.' }
+    # Mostly failing with memory to spare means the tests can't run at all, say from a missing package.
+    # Every size would then match Control, which would read as passing.
+    $broken = @($Control | Where-Object { $_.testsTotal -and @($_.failedTests | Where-Object { $_ }).Count * 2 -ge [int]$_.testsTotal }).Count
+    if ($broken) { return "$broken Control run(s) failed at least half their tests, so the workload needs looking at first." }
     ''
 }
 

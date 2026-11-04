@@ -485,6 +485,14 @@ Describe 'the smallest passing size' {
         $bad = @((New-Run -Workload 'W2' -Config 'MemEval-12' -TestsTotal 10), (New-Run -Workload 'W2' -Config 'MemEval-12' -TestsTotal 10), (New-Run -Workload 'W2' -Config 'MemEval-12' -TestsTotal 0))
         (Get-WorkloadResult -Runs @($bad) -Workload 'W2' -HostName 'PC1').ControlProblem | Should Match 'disagree'
     }
+    It 'judges nothing against a Control whose tests mostly failed, which only means they could not run' {
+        $names = 1..11 | ForEach-Object { "t$_" }
+        $bad = 1..3 | ForEach-Object { New-Run -Workload 'W3' -Config 'MemEval-12' -TestsTotal 11 -FailedTests $names }
+        $same = 1..3 | ForEach-Object { New-Run -Workload 'W3' -TestsTotal 11 -FailedTests $names }
+        $r = Get-WorkloadResult -Runs (@($bad) + @($same)) -Workload 'W3' -HostName 'PC1'
+        $r.ControlProblem | Should Match 'at least half'
+        $null -eq $r.SmallestGB | Should Be $true
+    }
     It 'judges nothing against a Control that ran no tests' {
         $bad = 1..3 | ForEach-Object { New-Run -Config 'MemEval-12' -TestsTotal 0 }
         (Get-WorkloadResult -Runs (@($bad) + @(Three 'MemEval-4')) -Workload 'W7' -HostName 'PC1').ControlProblem | Should Match 'no tests'
