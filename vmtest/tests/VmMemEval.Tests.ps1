@@ -261,6 +261,24 @@ Describe 'the criteria' {
         It 'passes a step failing in Control too' {
             (Check (Run-Criteria (New-Run -Speech ([pscustomobject]@{ failed = @('step 3'); misplaced = 0; audioGaps = 0 })) $controlSpeech) 2).Result | Should Be 'Pass'
         }
+        It 'passes a silent step in another repeat of the tour, as Control itself does' {
+            $base = New-Run -Config 'MemEval-12' -Speech ([pscustomobject]@{ failed = @('step 60 silent', 'step 61 silent'); misplaced = 0; audioGaps = 0 })
+            (Check (Run-Criteria (New-Run -Speech ([pscustomobject]@{ failed = @('step 76 silent', 'step 77 silent'); misplaced = 0; audioGaps = 0 })) $base) 2).Result | Should Be 'Pass'
+        }
+        It 'fails a silent step at a place in the tour Control never goes silent' {
+            $base = New-Run -Config 'MemEval-12' -Speech ([pscustomobject]@{ failed = @('step 60 silent'); misplaced = 0; audioGaps = 0 })
+            (Check (Run-Criteria (New-Run -Speech ([pscustomobject]@{ failed = @('step 3 silent'); misplaced = 0; audioGaps = 0 })) $base) 2).Detail | Should Match 'tour position 3'
+        }
+        It 'fails far more silent steps than Control, even at places Control goes silent' {
+            $base = New-Run -Config 'MemEval-12' -Speech ([pscustomobject]@{ failed = @('step 15 silent', 'step 16 silent'); misplaced = 0; audioGaps = 0 })
+            $many = 1..8 | ForEach-Object { "step $(15 + 16 * $_) silent" }
+            (Check (Run-Criteria (New-Run -Speech ([pscustomobject]@{ failed = $many; misplaced = 0; audioGaps = 0 })) $base) 2).Detail | Should Match 'steps silent, against at most 2'
+        }
+        It 'fails a VM where every step is silent, the bad-Clean case' {
+            $base = New-Run -Config 'MemEval-12' -Speech ([pscustomobject]@{ failed = @('step 15 silent'); misplaced = 0; audioGaps = 0 })
+            $all = 1..86 | ForEach-Object { "step $_ silent" }
+            (Check (Run-Criteria (New-Run -Speech ([pscustomobject]@{ failed = $all; misplaced = 0; audioGaps = 0 })) $base) 2).Result | Should Be 'Fail'
+        }
         It 'fails speech in the wrong step' {
             (Check (Run-Criteria (New-Run -Speech ([pscustomobject]@{ failed = @(); misplaced = 1; audioGaps = 0 })) $controlSpeech) 2).Result | Should Be 'Fail'
         }

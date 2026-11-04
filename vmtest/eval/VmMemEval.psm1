@@ -28,6 +28,7 @@ function Get-EvalHosts { 'SURFACEPRO7', 'THESTADIUM' }
 function Get-EvalThresholds {
     [pscustomobject]@{
         MinRuns             = 3      # runs needed at a size, Control included, before it can pass
+        SilentStepsAllowance = 2     # criterion 2: silent steps beyond Control's most
         TaskTimePercent     = 10     # criterion 5
         LatencyMedianPercent = 10    # criterion 6
         LatencyMedianMs     = 100
@@ -52,6 +53,12 @@ function Get-EvalThresholds {
 function Get-EvalMinRuns {
     param([string]$Workload, $Thresholds = (Get-EvalThresholds))
     if ($Workload -in 'W6', 'W9') { 1 } else { $Thresholds.MinRuns }
+}
+
+# Where a silent step falls in the tour, which repeats every 16 keys. See guest\Measure-SpeechTake.ps1.
+function ConvertTo-TourPosition {
+    param([string]$Step)
+    if ($Step -match '^step (\d+) silent$') { "tour position $((([int]$Matches[1] - 1) % 16) + 1)" } else { $Step }
 }
 
 # Which criteria beyond the ones every workload has must be measured for each workload, so a speech
@@ -377,9 +384,14 @@ function Get-EvalChecks {
     else {
         $withSpeech = @($Candidate | Where-Object $hasSpeech)
         $problems = @()
-        $controlFails = @($Control | Where-Object $hasSpeech | ForEach-Object { $_.speech.failed } | Where-Object { $_ } | ForEach-Object { $_ })
-        $newFails = @($withSpeech | ForEach-Object { $_.speech.failed } | Where-Object { $_ } | ForEach-Object { $_ } | Where-Object { $controlFails -notcontains $_ } | Sort-Object -Unique)
+        # The tour repeats, and which repeat of a step goes silent varies even at Control, so a step is
+        # compared by where it falls in the tour, and how many went silent is compared separately.
+        $controlFails = @($Control | Where-Object $hasSpeech | ForEach-Object { $_.speech.failed } | Where-Object { $_ } | ForEach-Object { ConvertTo-TourPosition $_ })
+        $newFails = @($withSpeech | ForEach-Object { $_.speech.failed } | Where-Object { $_ } | ForEach-Object { ConvertTo-TourPosition $_ } | Where-Object { $controlFails -notcontains $_ } | Sort-Object -Unique)
         if ($newFails.Count) { $problems += "steps failing only here: $($newFails -join ', ')" }
+        $controlMost = (@($Control | Where-Object $hasSpeech | ForEach-Object { @($_.speech.failed | Where-Object { $_ }).Count }) | Measure-Object -Maximum).Maximum
+        $silentHere = Get-Median @($withSpeech | ForEach-Object { [double]@($_.speech.failed | Where-Object { $_ }).Count })
+        if ($silentHere -gt $controlMost + $t.SilentStepsAllowance) { $problems += "$silentHere steps silent, against at most $controlMost at Control" }
         $misplaced = (@($withSpeech | ForEach-Object { [int]$_.speech.misplaced }) | Measure-Object -Sum).Sum
         if ($misplaced) { $problems += "$misplaced speech in the wrong step" }
         $gaps = (@($withSpeech | ForEach-Object { [int]$_.speech.audioGaps }) | Measure-Object -Sum).Sum
