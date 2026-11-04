@@ -42,6 +42,18 @@ foreach ($name in $Config) {
     try { vtOk run -ScriptFile $seed -Timeout 120 | Out-Null } finally { Remove-Item $seed -ErrorAction SilentlyContinue }
     # Replaces Clean, reboots so nothing from the install is left running, and frees the VM.
     vtOk prepare -VM $name -Force | Out-Null
+    # A Clean taken with Windows' focus lost leaves a screen reader hearing nothing, at any size, which
+    # would look exactly like that size failing. It has to come back on the desktop, or it's retaken.
+    foreach ($attempt in 1..3) {
+        vtOk begin -VM $name | Out-Null
+        $focus = @(vtOk windows) -join ' '
+        vtOk end | Out-Null
+        if ($focus -match 'Program Manager') { break }
+        if ($attempt -eq 3) { throw "$name's Clean comes back with focus on: $focus. It isn't usable for speech tests." }
+        Write-Host "$name's Clean came back with focus on: $focus. Taking it again."
+        vtOk begin -VM $name | Out-Null
+        vtOk prepare -VM $name -Force | Out-Null
+    }
     # Only now, so a failure above is put right by running this again.
     Set-VM -Name $name -Notes "$((Get-VM -Name $name).Notes) Rigged."
     "$name has the rig in its Clean, after $([int]((Get-Date) - $began).TotalMinutes) min."

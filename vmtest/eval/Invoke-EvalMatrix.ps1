@@ -41,6 +41,20 @@ function Initialize-Size([string]$C) {
     & (Join-Path $PSScriptRoot 'Install-EvalRig.ps1') -Config $C @arguments | ForEach-Object { Write-Host "  $_" }
 }
 
+# Hand back any eval VM a run left locked, say because whatever started it was killed. No other run can
+# be going, since each host only runs one of these at a time, and waiting on one would never end.
+function Clear-StrandedRuns {
+    foreach ($file in Get-ChildItem (Join-Path $env:LOCALAPPDATA 'vmtest') -Filter 'lock-MemEval-*.json' -ErrorAction SilentlyContinue) {
+        $lock = Get-Content $file.FullName -Raw | ConvertFrom-Json
+        if ($lock.repo -ne 'MemEval') { continue }
+        Write-Host "Handing back $($file.BaseName -replace '^lock-', ''), left by $($lock.branch)"
+        $tool = if ($ToolPath) { $ToolPath } elseif (Test-Path 'C:\vmtest-tool\vmtest.ps1') { 'C:\vmtest-tool\vmtest.ps1' } else { Join-Path (Split-Path $PSScriptRoot) 'vmtest.ps1' }
+        $r = Invoke-EvalVmTest -ToolPath $tool -Pool @(Get-EvalConfigs | ForEach-Object Name) -Arguments @('end', '-Repo', 'MemEval', '-Branch', $lock.branch)
+        if ($r.ExitCode -ne 0) { throw "Couldn't hand back $($file.BaseName): $($r.Output -join ' ')" }
+    }
+}
+Clear-StrandedRuns
+
 # One run in its own process, so one failing can't take the rest with it.
 function Invoke-One([string]$W, [string]$C) {
     # Other work on this PC comes first. A run can't start beside it, so wait quietly for it to finish.
