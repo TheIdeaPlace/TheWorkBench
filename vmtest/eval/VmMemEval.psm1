@@ -392,10 +392,16 @@ function Get-EvalChecks {
         $controlMost = (@($Control | Where-Object $hasSpeech | ForEach-Object { @($_.speech.failed | Where-Object { $_ }).Count }) | Measure-Object -Maximum).Maximum
         $silentHere = Get-Median @($withSpeech | ForEach-Object { [double]@($_.speech.failed | Where-Object { $_ }).Count })
         if ($silentHere -gt $controlMost + $t.SilentStepsAllowance) { $problems += "$silentHere steps silent, against at most $controlMost at Control" }
-        $misplaced = (@($withSpeech | ForEach-Object { [int]$_.speech.misplaced }) | Measure-Object -Sum).Sum
-        if ($misplaced) { $problems += "$misplaced speech in the wrong step" }
-        $gaps = (@($withSpeech | ForEach-Object { [int]$_.speech.audioGaps }) | Measure-Object -Sum).Sum
-        if ($gaps) { $problems += "$gaps audio gaps" }
+        # Per run, against Control's: with a build going alongside, Control has these too, and then they
+        # aren't about memory. Where Control is clean, one is a fail.
+        $controlSpeech = @($Control | Where-Object $hasSpeech)
+        $perRun = { param($runs, [string]$field) if (@($runs).Count) { (@($runs | ForEach-Object { [int]$_.speech.$field }) | Measure-Object -Sum).Sum / @($runs).Count } else { 0 } }
+        $misplaced = & $perRun $withSpeech 'misplaced'
+        $controlMisplaced = & $perRun $controlSpeech 'misplaced'
+        if ($misplaced -gt $controlMisplaced) { $problems += ("{0:N1} per run of speech in the wrong step, against {1:N1} at Control" -f $misplaced, $controlMisplaced) }
+        $gaps = & $perRun $withSpeech 'audioGaps'
+        $controlGaps = & $perRun $controlSpeech 'audioGaps'
+        if ($gaps -gt $controlGaps) { $problems += ("{0:N1} audio gaps per run, against {1:N1} at Control" -f $gaps, $controlGaps) }
         New-Check 2 'Same speech' $(if ($problems.Count) { 'Fail' } else { 'Pass' }) ($problems -join '; ')
     }
 

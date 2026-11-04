@@ -279,6 +279,14 @@ Describe 'the criteria' {
             $all = 1..86 | ForEach-Object { "step $_ silent" }
             (Check (Run-Criteria (New-Run -Speech ([pscustomobject]@{ failed = $all; misplaced = 0; audioGaps = 0 })) $base) 2).Result | Should Be 'Fail'
         }
+        It 'passes an audio gap and misplaced speech that Control has just as often' {
+            $base = New-Run -Config 'MemEval-12' -Speech ([pscustomobject]@{ failed = @(); misplaced = 1; audioGaps = 1 })
+            (Check (Run-Criteria (New-Run -Speech ([pscustomobject]@{ failed = @(); misplaced = 1; audioGaps = 1 })) $base) 2).Result | Should Be 'Pass'
+        }
+        It 'fails more audio gaps per run than Control has' {
+            $base = @((New-Run -Config 'MemEval-12' -Speech ([pscustomobject]@{ failed = @(); misplaced = 0; audioGaps = 0 })), (New-Run -Config 'MemEval-12' -Speech ([pscustomobject]@{ failed = @(); misplaced = 0; audioGaps = 1 })))
+            (Check (Run-Criteria (New-Run -Speech ([pscustomobject]@{ failed = @(); misplaced = 0; audioGaps = 1 })) $base) 2).Detail | Should Match 'audio gaps per run'
+        }
         It 'fails speech in the wrong step' {
             (Check (Run-Criteria (New-Run -Speech ([pscustomobject]@{ failed = @(); misplaced = 1; audioGaps = 0 })) $controlSpeech) 2).Result | Should Be 'Fail'
         }
