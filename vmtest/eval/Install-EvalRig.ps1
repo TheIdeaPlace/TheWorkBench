@@ -42,8 +42,8 @@ foreach ($name in $Config) {
     try { vtOk run -ScriptFile $seed -Timeout 120 | Out-Null } finally { Remove-Item $seed -ErrorAction SilentlyContinue }
     # Replaces Clean, reboots so nothing from the install is left running, and frees the VM.
     vtOk prepare -VM $name -Force | Out-Null
-    # One Clean left NVDA hearing nothing at all, for a reason never found, until it was taken again. That
-    # would look exactly like that size failing, so a short real take has to produce speech first.
+    # One Clean left NVDA hearing nothing at all until it was taken again, probably with Windows' Get
+    # Started window holding focus. That would look exactly like that size failing, so a short real take has to produce speech first.
     $vt = { param($Command) $rest = @($args); Invoke-EvalVmTest -ToolPath $ToolPath -Pool $pool -Arguments (@($Command) + $rest + @('-Repo', 'MemEval', '-Branch', "rig-$name")) }
     foreach ($attempt in 1..3) {
         vtOk begin -VM $name | Out-Null

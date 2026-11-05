@@ -156,8 +156,10 @@ Several Claude sessions can test at once, each in its own VM. The pool is the fi
   read-only base disk, then makes each copy with a differencing disk on top of it, so each copy costs
   only what it changes. Each copy gets its own Windows computer name and network address, signs in by
   itself, and gets its own Clean. It takes a few minutes per VM, and the other VMs keep working meanwhile.
-- **Memory.** Each VM uses about 4 GB while it runs, and a saved VM uses none. `begin` won't start a
-  VM unless this PC would still have `VMTEST_RESERVE_GB` free; it says so instead.
+- **Memory.** Each VM starts with 4 GB and can grow to 6 GB, and a saved VM uses none. Measured, a VM
+  asks for 2 to 3 GB for light work and up to about 4.5 GB for heavy work; see
+  [`docs/memory-evaluation.md`](docs/memory-evaluation.md). `begin` won't start a VM unless this PC would
+  still have `VMTEST_RESERVE_GB` free; it says so instead.
 - **Checkpoints stay on their VM.** A task's checkpoint lives on the VM it last saved on, and `begin`
   prefers that VM. If it's busy, the task starts from Clean on another VM and `begin` says so; saving
   there replaces the older checkpoint.
