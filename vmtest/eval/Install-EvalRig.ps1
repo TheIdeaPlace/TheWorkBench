@@ -42,15 +42,18 @@ foreach ($name in $Config) {
     try { vtOk run -ScriptFile $seed -Timeout 120 | Out-Null } finally { Remove-Item $seed -ErrorAction SilentlyContinue }
     # Replaces Clean, reboots so nothing from the install is left running, and frees the VM.
     vtOk prepare -VM $name -Force | Out-Null
-    # A Clean taken with Windows' focus lost leaves a screen reader hearing nothing, at any size, which
-    # would look exactly like that size failing. It has to come back on the desktop, or it's retaken.
+    # One Clean left NVDA hearing nothing at all, for a reason never found, until it was taken again. That
+    # would look exactly like that size failing, so a short real take has to produce speech first.
+    $vt = { param($Command) $rest = @($args); Invoke-EvalVmTest -ToolPath $ToolPath -Pool $pool -Arguments (@($Command) + $rest + @('-Repo', 'MemEval', '-Branch', "rig-$name")) }
     foreach ($attempt in 1..3) {
         vtOk begin -VM $name | Out-Null
-        $focus = @(vtOk windows) -join ' '
+        $take = Invoke-EvalSpeechWorkload -Vt $vt -Template (Join-Path $PSScriptRoot 'guest\Measure-SpeechTake.ps1') -Settings @{ Reader = 'NVDA'; TourMinutes = 1 } -TimeoutSeconds 600
         vtOk end | Out-Null
-        if ($focus -match 'Program Manager') { break }
-        if ($attempt -eq 3) { throw "$name's Clean comes back with focus on: $focus. It isn't usable for speech tests." }
-        Write-Host "$name's Clean came back with focus on: $focus. Taking it again."
+        $silent = @($take.speech.failed | Where-Object { $_ }).Count
+        if ([int]$take.exitCode -eq 0 -and $silent -le 6) { break }
+        $what = "exit $($take.exitCode), $silent of about 18 steps silent. $($take.problem)"
+        if ($attempt -eq 3) { throw "${name}'s Clean doesn't work for speech: $what" }
+        Write-Host "${name}'s Clean failed the speech check: $what Taking it again."
         vtOk begin -VM $name | Out-Null
         vtOk prepare -VM $name -Force | Out-Null
     }
