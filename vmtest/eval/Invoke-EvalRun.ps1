@@ -91,6 +91,10 @@ $record = [ordered]@{
     discarded = $false; discardReason = ''; notes = @(); troubled = $false
 }
 
+# So a later runner can tell this run is still going, and leave its VM alone.
+$runOwner = Join-Path $root "run-owner-$Config.txt"
+Set-Content $runOwner $PID -Encoding ASCII
+
 try {
     $beganAt = Get-Date
     $beginTried = $true

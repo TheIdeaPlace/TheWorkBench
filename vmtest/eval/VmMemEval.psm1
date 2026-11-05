@@ -37,6 +37,9 @@ function Get-EvalThresholds {
         # had 210 and 234, about 11% apart, so a fixed number only suits a short tour.
         SilentStepsAllowance = 2
         SilentStepsPercent  = 10
+        SilentPlacePercent  = 20     # criterion 2: the same, for one place in the tour, which varies more
+        MisplacedPerRunAllowance = 0.5   # criterion 2: one in a run happens at Control too
+        OneBadRunFactor     = 1.5    # criterion 5: how far past the allowance one run may be
         TaskTimePercent     = 10     # criterion 5
         LatencyMedianPercent = 10    # criterion 6
         LatencyMedianMs     = 100
@@ -292,9 +295,10 @@ function Get-RunDiscardReason {
     ''
 }
 
-# QuickMail's suite sometimes stops early and still reports no failures and exit 0, even with 12 GB on
-# offer. For a workload that does that, only full runs are compared, and how often each size stops early
-# is compared separately. A run that died stays in, because that's a failure and not a short run.
+# QuickMail's suite sometimes stopped early on the Arm host, at 12 GB too, with no failed tests recorded.
+# Why was never recorded in those runs, so a crash can't be ruled out. For a workload that does that, only
+# full runs are compared, and how often each size stops early is compared separately. A run that died, or
+# has failed tests, stays in, because that's a failure and not a short run.
 function Test-EvalStopsEarly { param([string]$Workload) $Workload -eq 'W7' }
 
 # Why a size can't be judged, not a sign of trouble at that size: the eval VM hadn't been made.
@@ -306,7 +310,7 @@ function Select-CountedRun {
     $valid = @(Select-ValidRun $Runs $Workload $Config $HostName)
     if (-not (Test-EvalStopsEarly $Workload)) { return $valid }
     $full = Get-EvalFullTestCount $Runs $Workload $HostName
-    @($valid | Where-Object { [int]$_.exitCode -ne 0 -or $null -eq $_.testsTotal -or [int]$_.testsTotal -eq $full })
+    @($valid | Where-Object { [int]$_.exitCode -ne 0 -or $null -eq $_.testsTotal -or [int]$_.testsTotal -eq $full -or @($_.failedTests | Where-Object { $_ }).Count })
 }
 
 # A full run's test count: the most any run of this workload on this host managed.
@@ -392,29 +396,48 @@ function Get-EvalChecks {
     else {
         $withSpeech = @($Candidate | Where-Object $hasSpeech)
         $problems = @()
-        # The tour repeats, and which repeat of a step goes silent varies even at Control, so a step is
-        # compared by where it falls in the tour, and how many went silent is compared separately.
-        $controlFails = @($Control | Where-Object $hasSpeech | ForEach-Object { $_.speech.failed } | Where-Object { $_ } | ForEach-Object { ConvertTo-TourPosition $_ })
-        # A place only counts if it goes silent in at least half the runs: under load, any size has the
-        # odd stray silent step, and Control's strays land elsewhere.
-        $hereFails = @($withSpeech | ForEach-Object { @($_.speech.failed | Where-Object { $_ } | ForEach-Object { ConvertTo-TourPosition $_ } | Sort-Object -Unique) })
-        $newFails = @($hereFails | Where-Object { $controlFails -notcontains $_ } | Group-Object | Where-Object { $_.Count * 2 -ge $withSpeech.Count } | ForEach-Object { $_.Name } | Sort-Object)
-        if ($newFails.Count) { $problems += "steps failing only here: $($newFails -join ', ')" }
-        $controlMost = (@($Control | Where-Object $hasSpeech | ForEach-Object { @($_.speech.failed | Where-Object { $_ }).Count }) | Measure-Object -Maximum).Maximum
-        $silentHere = Get-Median @($withSpeech | ForEach-Object { [double]@($_.speech.failed | Where-Object { $_ }).Count })
-        $silentAllowed = $controlMost + [math]::Max($t.SilentStepsAllowance, $controlMost * $t.SilentStepsPercent / 100.0)
-        if ($silentHere -gt $silentAllowed) { $problems += "$silentHere steps silent, against at most $controlMost at Control" }
-        # Per run, against Control's: with a build going alongside, Control has these too, and then they
-        # aren't about memory. Where Control is clean, one is a fail.
         $controlSpeech = @($Control | Where-Object $hasSpeech)
+        # The tour repeats, and which repeat of a step goes silent varies even at Control, so silence is
+        # counted by where it falls in the tour. A place fails if it goes silent clearly more often than at
+        # Control, in at least half the runs, so a stray step passes and a place that's always silent here
+        # doesn't. A backlog fails here too: speech running late moves the silent places along the tour.
+        $countByPlace = {
+            param($run)
+            $h = @{}
+            foreach ($f in @($run.speech.failed | Where-Object { $_ })) { $p = ConvertTo-TourPosition $f; $h[$p] = [int]$h[$p] + 1 }
+            $h
+        }
+        $controlPlaces = @{}
+        foreach ($run in $controlSpeech) {
+            $h = & $countByPlace $run
+            foreach ($p in $h.Keys) { if ($h[$p] -gt [int]$controlPlaces[$p]) { $controlPlaces[$p] = $h[$p] } }
+        }
+        $overByPlace = @{}
+        foreach ($run in $withSpeech) {
+            $h = & $countByPlace $run
+            foreach ($p in $h.Keys) {
+                $most = [int]$controlPlaces[$p]
+                if ($h[$p] -gt $most + [math]::Max($t.SilentStepsAllowance, $most * $t.SilentPlacePercent / 100.0)) { $overByPlace[$p] = [int]$overByPlace[$p] + 1 }
+            }
+        }
+        $newFails = @($overByPlace.Keys | Where-Object { $overByPlace[$_] * 2 -ge $withSpeech.Count } | Sort-Object)
+        if ($newFails.Count) { $problems += "silent clearly more often than at Control: $($newFails -join ', ')" }
+        # The worst run, so one run gone badly wrong isn't hidden by two good ones.
+        $controlMost = (@($controlSpeech | ForEach-Object { @($_.speech.failed | Where-Object { $_ }).Count }) | Measure-Object -Maximum).Maximum
+        $silentHere = (@($withSpeech | ForEach-Object { @($_.speech.failed | Where-Object { $_ }).Count }) | Measure-Object -Maximum).Maximum
+        $silentAllowed = $controlMost + [math]::Max($t.SilentStepsAllowance, $controlMost * $t.SilentStepsPercent / 100.0)
+        if ($silentHere -gt $silentAllowed) { $problems += "$silentHere steps silent in the worst run, against at most $controlMost in the worst of $($controlSpeech.Count) Control run(s)" }
+        # Per run, against Control's: with a build going alongside, Control has these too, and then they
+        # aren't about memory. Where Control is clean, more than an occasional one is a fail.
         $perRun = { param($runs, [string]$field) if (@($runs).Count) { (@($runs | ForEach-Object { [int]$_.speech.$field }) | Measure-Object -Sum).Sum / @($runs).Count } else { 0 } }
         $misplaced = & $perRun $withSpeech 'misplaced'
         $controlMisplaced = & $perRun $controlSpeech 'misplaced'
-        if ($misplaced -gt $controlMisplaced) { $problems += ("{0:N1} per run of speech in the wrong step, against {1:N1} at Control" -f $misplaced, $controlMisplaced) }
+        if ($misplaced -gt $controlMisplaced + $t.MisplacedPerRunAllowance) { $problems += ("{0:N1} per run of speech in the wrong step, against {1:N1} at Control" -f $misplaced, $controlMisplaced) }
         $gaps = & $perRun $withSpeech 'audioGaps'
         $controlGaps = & $perRun $controlSpeech 'audioGaps'
         if ($gaps -gt $controlGaps) { $problems += ("{0:N1} audio gaps per run, against {1:N1} at Control" -f $gaps, $controlGaps) }
-        New-Check 2 'Same speech' $(if ($problems.Count) { 'Fail' } else { 'Pass' }) ($problems -join '; ')
+        $basis = "$($withSpeech.Count) run(s) against $($controlSpeech.Count) at Control"
+        New-Check 2 'Same speech' $(if ($problems.Count) { 'Fail' } else { 'Pass' }) $(if ($problems.Count) { "$($problems -join '; '). $basis" } else { $basis })
     }
 
     # 3: no resource exhaustion and no new crashes. The events can only be read from a VM that answered.
@@ -454,7 +477,11 @@ function Get-EvalChecks {
         $controlMedian = Get-Median $controlTimes
         $allowed = [math]::Max($controlMedian * (1 + $t.TaskTimePercent / 100.0), ($controlTimes | Measure-Object -Maximum).Maximum)
         $median = Get-Median $times
-        New-Check 5 'Task time' $(if ($median -gt $allowed) { 'Fail' } else { 'Pass' }) ("median {0:N1} s, allowed {1:N1} s, Control {2:N1} s" -f $median, $allowed, $controlMedian)
+        # The median is the plan's test. One run far over it is an intermittent shortage, and fails too.
+        $slowest = ($times | Measure-Object -Maximum).Maximum
+        $oneRunLimit = $allowed * $t.OneBadRunFactor
+        $slow = $median -gt $allowed -or $slowest -gt $oneRunLimit
+        New-Check 5 'Task time' $(if ($slow) { 'Fail' } else { 'Pass' }) ("median {0:N1} s, allowed {1:N1} s, slowest {2:N1} s, allowed {3:N1} s, Control {4:N1} s" -f $median, $allowed, $slowest, $oneRunLimit, $controlMedian)
     }
 
     # 6: key press to first speech. With no Control figures there's nothing to compare it with.
@@ -470,7 +497,10 @@ function Get-EvalChecks {
         $controlWorst = Get-Median @($controlLatency | ForEach-Object { [double]$_.latency.worstMs })
         $allowMed = $controlMed + [math]::Max($controlMed * $t.LatencyMedianPercent / 100.0, $t.LatencyMedianMs)
         $allowWorst = $controlWorst + [math]::Max($controlWorst * $t.LatencyWorstPercent / 100.0, $t.LatencyWorstMs)
-        New-Check 6 'Speech latency' $(if ($med -gt $allowMed -or $worst -gt $allowWorst) { 'Fail' } else { 'Pass' }) ("median {0:N0} ms (allowed {1:N0}), worst 5% {2:N0} ms (allowed {3:N0})" -f $med, $allowMed, $worst, $allowWorst)
+        # One run far over the allowance is an intermittent shortage. This is the time of NVDA's log entry
+        # for speech within the step, not sound, so it can't see a late synthesizer; see Measure-SpeechTake.
+        $oneBad = @($withLatency | Where-Object { [double]$_.latency.medianMs -gt $allowMed * 2 -or [double]$_.latency.worstMs -gt $allowWorst * 2 }).Count
+        New-Check 6 'Speech latency' $(if ($med -gt $allowMed -or $worst -gt $allowWorst -or $oneBad) { 'Fail' } else { 'Pass' }) ("median {0:N0} ms (allowed {1:N0}), worst 5% {2:N0} ms (allowed {3:N0}), {4} run(s) far over" -f $med, $allowMed, $worst, $allowWorst, $oneBad)
     }
 
     # 7 to 9 need the guest's counters from every run. A bad measure from the runs that have them still
@@ -488,14 +518,14 @@ function Get-EvalChecks {
     $low = & $worstOf 'LowAvailableSeconds'
     $gone = & $missing 'LowAvailableSeconds'
     $result = if ($null -ne $low -and $low -ge $t.SustainedSeconds) { 'Fail' } elseif ($gone) { 'Incomplete' } else { 'Pass' }
-    New-Check 7 'Memory available' $result "under $($t.AvailableMB) MB for $low s at longest, measured in $($total - $gone) of $total runs"
+    New-Check 7 'Memory available' $result ("under {0} MB for {1:N0} s at longest, measured in {2} of {3} runs" -f $t.AvailableMB, $low, ($total - $gone), $total)
 
     # 8: no sustained paging, unless Control pages about as long, in which case it isn't about size.
     $paging = & $worstOf 'PagingSeconds'
     $gone = & $missing 'PagingSeconds'
     $controlPaging = [double](@($Control | Where-Object { $_.guest -and $null -ne $_.guest.PagingSeconds } | ForEach-Object { [double]$_.guest.PagingSeconds }) | Measure-Object -Maximum).Maximum
     $result = if ($null -ne $paging -and $paging -ge $t.SustainedSeconds -and $paging -gt $controlPaging * $t.PagingControlFactor) { 'Fail' } elseif ($gone) { 'Incomplete' } else { 'Pass' }
-    New-Check 8 'No sustained paging' $result "$paging s at longest, Control $controlPaging s, measured in $($total - $gone) of $total runs"
+    New-Check 8 'No sustained paging' $result ("{0:N0} s at longest, Control {1:N0} s, measured in {2} of {3} runs" -f $paging, $controlPaging, ($total - $gone), $total)
 
     # 9: commit and the paging file.
     $commit = & $worstOf 'PeakCommitPercent'
@@ -547,6 +577,9 @@ function Get-ControlProblem {
     # Every size would then match Control, which would read as passing.
     $broken = @($Control | Where-Object { $_.testsTotal -and @($_.failedTests | Where-Object { $_ }).Count * 2 -ge [int]$_.testsTotal }).Count
     if ($broken) { return "$broken Control run(s) failed at least half their tests, so the workload needs looking at first." }
+    # The same for speech: a Control that can't speak would let every size match it.
+    $mute = @($Control | Where-Object { $_.speech -and $_.speech.steps -and @($_.speech.failed | Where-Object { $_ }).Count * 2 -ge [int]$_.speech.steps }).Count
+    if ($mute) { return "$mute Control run(s) had at least half their steps silent, so the workload needs looking at first." }
     ''
 }
 
@@ -585,6 +618,7 @@ function Get-WorkloadResult {
                 # against the criteria, so one run decides it either way.
                 elseif ($c.Role -ne 'TooSmall' -and $sizeRuns.Count -lt $MinRuns) { "It has $($sizeRuns.Count) of the $MinRuns runs it needs." }
                 elseif ($setups.Count -gt 1) { 'Its runs and Control''s used different settings, so they can''t be compared.' }
+                elseif ($sizeRuns.Count -eq 0) { "Its only runs stopped early." }
                 else { '' }
             if ($reason) {
                 $badRuns = @($sizeRuns | Where-Object { [int]$_.exitCode -ne 0 -or ($_.guestEvents -and [int]$_.guestEvents.exhaustion -gt 0) }).Count
@@ -600,6 +634,8 @@ function Get-WorkloadResult {
     $largestFailed = if ($failedSizes.Count) { ($failedSizes | Measure-Object -Maximum).Maximum } else { 0 }
     $passing = @($candidates | Where-Object { $_.Pass -eq $true -and $_.MaxGB -gt $largestFailed } | Sort-Object MaxGB)
     $outOfOrder = @($candidates | Where-Object { $_.Pass -eq $true -and $_.MaxGB -lt $largestFailed }).Count -gt 0
+    # A smaller size that couldn't be judged, with no sign of trouble, means this is only an upper limit.
+    $upperLimit = $passing.Count -and @($candidates | Where-Object { $_.MaxGB -lt $passing[0].MaxGB -and $null -eq $_.Pass -and -not $_.Trouble }).Count -gt 0
     # A size meant to be too small that passes means the criteria can't see a shortage in this
     # workload, so its other passes prove nothing.
     $tooSmall = @($sizes | Where-Object { $_.Role -eq 'TooSmall' })
@@ -615,6 +651,7 @@ function Get-WorkloadResult {
         PeakGB          = if ($peaks.Count) { ($peaks | Measure-Object -Maximum).Maximum } else { $null }
         Sizes           = $sizes
         OutOfOrder      = $outOfOrder
+        UpperLimitOnly  = $upperLimit
         CriteriaBlind   = $blind
         ShortageCaught  = @($tooSmall | Where-Object { $_.Pass -eq $false }).Count -gt 0
         SmallestGB      = if ($passing.Count -and -not $blind) { $passing[0].MaxGB } else { $null }
@@ -624,8 +661,9 @@ function Get-WorkloadResult {
 # The plan's decision rules, as far as the workload results alone can take them. Tiers also need
 # Phase 3's numbers, so that part comes back as a question to answer, not an answer. W9 only runs at
 # the finalist size, so it can't choose a size, but the size isn't settled until it has passed there.
+# W6, JAWS, has no workload script yet, so it can't choose one either, and the answer says it wasn't run.
 function Get-EvalDecision {
-    param([Parameter(Mandatory)][object[]]$Results, [string[]]$Hosts = (Get-EvalHosts), [string[]]$LightWorkloads = @('W0', 'W1', 'W2', 'W3', 'W4', 'W5', 'W6'), [string[]]$HeavyWorkloads = @('W7', 'W8'), [string]$SoakWorkload = 'W9')
+    param([Parameter(Mandatory)][object[]]$Results, [string[]]$Hosts = (Get-EvalHosts), [string[]]$LightWorkloads = @('W0', 'W1', 'W2', 'W3', 'W4', 'W5'), [string[]]$HeavyWorkloads = @('W7', 'W8'), [string]$SoakWorkload = 'W9')
     $need = {
         param([string[]]$workloads, [string[]]$on)
         $largest = $null
@@ -652,6 +690,9 @@ function Get-EvalDecision {
         elseif ($heavy -le $default) { "One size: $default GB maximum. W7 and W8 fit, so no tiers." }
         else { "Default $default GB; W7 or W8 need $heavy GB. Phase 3 decides: a heavy tier only if it lets a host run one more VM or lowers host peak memory by at least 4 GB. Otherwise one size at $heavy GB." }
     $notes = @()
+    if (-not @($Results | Where-Object { $_.Workload -eq 'W6' }).Count) { $notes += 'W6, JAWS, has not been run, so this says nothing about JAWS.' }
+    $limits = @($Results | Where-Object { $_.UpperLimitOnly })
+    if ($limits.Count) { $notes += "For $(($limits | ForEach-Object { "$($_.Workload) on $($_.Host)" }) -join ', '), a smaller size wasn't judged, so that size is only an upper limit." }
     $chosen = if ($null -ne $default) { if ($null -ne $heavy -and $heavy -gt $default) { $heavy } else { $default } }
     if ($null -ne $chosen) {
         $soakShort = @($Hosts | Where-Object {
@@ -677,8 +718,17 @@ function Get-EvalDecision {
 # Hyper-V's Warning status, isn't used: a 4 GB VM at its limit is in Warning for most of a run even alone,
 # with no harm done. Slowdown is reported, with the PC's CPU beside it.
 function Test-TogetherRuns {
-    param([Parameter(Mandatory)][object[]]$Runs, [double]$ReserveGB = 4, [hashtable]$AloneSeconds = @{}, [double]$CpuBusyPercent = 90)
+    param([Parameter(Mandatory)][object[]]$Runs, [double]$ReserveGB = 4, [hashtable]$AloneSeconds = @{}, [double]$CpuBusyPercent = 90, $Thresholds = (Get-EvalThresholds))
     $problems = @()
+    # Not failures of the PC, but what a single VM's criteria would call a fail, so they're always said.
+    $warnings = @()
+    foreach ($r in @($Runs)) {
+        $what = "$($r.workload) on $($r.config)"
+        if (-not $r.guest) { $warnings += "$what has no counters." }
+        elseif ([double]$r.guest.PeakCommitPercent -ge $Thresholds.CommitPercent) { $warnings += "$what reached $($r.guest.PeakCommitPercent)% commit, over the $($Thresholds.CommitPercent)% a single VM is allowed." }
+        if ($r.speech -and $r.speech.steps -and @($r.speech.failed | Where-Object { $_ }).Count * 2 -ge [int]$r.speech.steps) { $warnings += "$what had at least half its steps silent." }
+        if ($r.discarded -and $r.discardReason) { $warnings += "$what was thrown out: $($r.discardReason)" }
+    }
     $notStarted = @($Runs | Where-Object { $null -eq $_.durationSeconds })
     if ($notStarted.Count) { $problems += "$($notStarted.Count) VM(s) couldn't start or finish: $(($notStarted | ForEach-Object { "$($_.config): $($_.discardReason)" }) -join '; ')" }
     $started = @($Runs | Where-Object { $null -ne $_.durationSeconds })
@@ -697,6 +747,7 @@ function Test-TogetherRuns {
     [pscustomobject]@{
         Pass       = ($problems.Count -eq 0)
         Problems   = $problems
+        Warnings   = $warnings
         LowestHostMB = $lowest
         PeakCpu    = $peakCpu
         CpuBusy    = ($null -ne $peakCpu -and $peakCpu -ge $CpuBusyPercent)

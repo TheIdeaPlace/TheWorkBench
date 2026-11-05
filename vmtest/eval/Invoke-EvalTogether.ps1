@@ -63,4 +63,5 @@ $result = Test-TogetherRuns -Runs $runs -AloneSeconds $alone
 foreach ($r in $runs) { "$($r.config), $($r.workload): $($r.durationSeconds) s, exit $($r.exitCode), tests $($r.testsTotal), failed $(@($r.failedTests).Count), peak demand $($r.peakDemandMB) MB, commit $($r.guest.PeakCommitPercent)%, paging $([int]$r.guest.PagingSeconds) s" }
 foreach ($s in $result.Slowdowns) { "$($s.Workload) took $($s.Ratio) times as long as alone." }
 foreach ($p in $result.Problems) { "Problem: $p" }
+foreach ($p in $result.Warnings) { "Warning: $p" }
 if ($result.CpuBusy) { 'The PC''s CPU was close to full, so slowdown here may be CPU rather than memory.' }

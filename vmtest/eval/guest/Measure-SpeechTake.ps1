@@ -1,10 +1,15 @@
 # Runs in the VM as the signed-in user: installs QuickMail, starts a screen reader, records a tour of
 # the app's menus through audio-demo's demo.ps1, and prints one WORKLOAD line. What it measures, from
 # the take's own key log, NVDA's speech log and the recording:
-#   failed     steps where the screen reader said nothing (NVDA only: Narrator keeps no log)
-#   misplaced  steps whose speech began after the next key was due, so it landed in the wrong step
-#   audioGaps  1 if the recording is more than half a second shorter than the take, meaning capture fell behind
-#   latency    key press to first speech: median, and the worst 5%
+#   failed     steps where the screen reader said nothing (NVDA only: Narrator keeps no log). Speech is
+#              given to whichever step it falls in, so a backlog shows as silence moving along the tour,
+#              not as a long latency. The criteria compare silence by place in the tour for that reason.
+#   misplaced  steps whose first speech came more than a step's time after the key
+#   audioGaps  1 if the recording is more than half a second shorter than the take. Only 0 or 1, so a build
+#              alongside, which costs every size one, hides how much was lost: audioShortSeconds says.
+#   latency    key press to NVDA's log entry for the first speech in that step, median and worst 5%. That's
+#              NVDA sending it, not sound coming out, so a late synthesizer doesn't show here.
+#   problems   a wall clock that moved during the take, which spoils the speech times, so they aren't reported.
 #
 # The workload puts these in front of this file when it sends it: $Reader (NVDA or Narrator), $TourMinutes,
 # and $AlongsideBuild, which builds QuickMail throughout for the worst case.
@@ -21,7 +26,7 @@ function ConvertTo-SecondsOfDay([string]$Clock) {
 # What a take's key log says: the wall clock at its zero, how far NVDA's log had got, and each key's time.
 function Read-KeyLog {
     param([string[]]$Lines)
-    $zero = $null; $logPos = 0; $keys = @()
+    $zero = $null; $logPos = 0; $keys = @(); $endSeconds = $null; $drift = $null; $clockEnd = $null; $clockEndAt = $null
     foreach ($line in $Lines) {
         $f = $line.Split("`t")
         if ($f.Count -lt 2 -or $f[0] -notmatch '^\d+$') { continue }
@@ -30,9 +35,18 @@ function Read-KeyLog {
             'clock' { $zero = (ConvertTo-SecondsOfDay $f[2]) - $ms / 1000 }
             'logpos' { $logPos = [int64]$f[2] }
             'k' { $keys += $ms / 1000 }
+            'end' { $endSeconds = $ms / 1000 }
+            'clockend' { $clockEnd = ConvertTo-SecondsOfDay $f[2]; $clockEndAt = $ms / 1000 }
         }
     }
-    [pscustomobject]@{ Zero = $zero; LogPosition = $logPos; Keys = @($keys) }
+    # NVDA's times follow the wall clock and the keys follow a stopwatch, so a clock moved by Hyper-V's
+    # time sync partway through would line speech up against the wrong keys.
+    if ($null -ne $zero -and $null -ne $clockEnd) {
+        $wall = $clockEnd - $zero
+        if ($wall -lt -43200) { $wall += 86400 }
+        $drift = $wall - $clockEndAt
+    }
+    [pscustomobject]@{ Zero = $zero; LogPosition = $logPos; Keys = @($keys); EndSeconds = $endSeconds; ClockMoved = $drift }
 }
 
 # When NVDA said something, in seconds of the day, from the lines of its log.
@@ -42,8 +56,9 @@ function Read-SpeechTimes {
     foreach ($line in $Lines) {
         if ($line -match '^IO - \S+ \((\d\d:\d\d:\d\d\.\d{3})\)') { $when = ConvertTo-SecondsOfDay $Matches[1]; continue }
         if ($null -ne $when -and $line.StartsWith('Speaking ')) {
-            # Quoted strings outside a command's parentheses are the speech; a list of only commands says nothing.
-            if (($line.Substring(9) -replace '\w+\s*\([^)]*\)', '') -match "'[^']*\S[^']*'|""[^""]*\S[^""]*""") { $when }
+            # Quoted strings outside a command's parentheses are the speech; a list of only commands says
+            # nothing. Only the commands' brackets are removed: 'Inbox (3)' is speech.
+            if (($line.Substring(9) -replace '\b\w*(Command|CancellableSpeech)\s*\([^)]*\)', '') -match "'[^']*\S[^']*'|""[^""]*\S[^""]*""") { $when }
             $when = $null
         }
     }
@@ -51,11 +66,12 @@ function Read-SpeechTimes {
 
 # Line the speech up against the keys.
 function Measure-Speech {
-    param([double[]]$KeySeconds, [double[]]$SpeechSeconds, [double]$StepSeconds = 3.5)
+    param([double[]]$KeySeconds, [double[]]$SpeechSeconds, [double]$StepSeconds = 3.5, [double]$EndSeconds = [double]::MaxValue)
     $failed = @(); $misplaced = 0; $latencies = @()
     for ($i = 0; $i -lt $KeySeconds.Count; $i++) {
         $key = $KeySeconds[$i]
-        $next = if ($i + 1 -lt $KeySeconds.Count) { $KeySeconds[$i + 1] } else { [double]::MaxValue }
+        # The last step ends with the take, so the app closing doesn't count as that step's speech.
+        $next = if ($i + 1 -lt $KeySeconds.Count) { $KeySeconds[$i + 1] } else { $EndSeconds }
         $inStep = @($SpeechSeconds | Where-Object { $_ -ge $key -and $_ -lt $next } | Sort-Object)
         if ($inStep.Count -eq 0) { $failed += "step $($i + 1) silent"; continue }
         $latency = ($inStep[0] - $key) * 1000
@@ -81,6 +97,28 @@ function Get-WavSeconds {
         $bytesPerSecond = $reader.ReadInt32()
         if ($bytesPerSecond -le 0) { return 0 }
         ($stream.Length - 44) / $bytesPerSecond
+    } finally { $stream.Close() }
+}
+
+# Seconds since the take's zero, across midnight if it ran past it.
+function ConvertTo-TakeSeconds {
+    param([double]$SecondsOfDay, [double]$Zero)
+    $t = $SecondsOfDay - $Zero
+    if ($t -lt -43200) { $t + 86400 } elseif ($t -gt 43200) { $t - 86400 } else { $t }
+}
+
+# Whether a PCM recording has any sound in it, from a sample of it. A virtual cable with nothing playing
+# records zeros, and Narrator keeps no log, so this is the only sign it spoke at all.
+function Test-WavHasSound {
+    param([string]$Path)
+    $stream = [IO.File]::OpenRead($Path)
+    try {
+        $buffer = New-Object byte[] 65536
+        $stream.Position = [math]::Min(44, $stream.Length)
+        while (($read = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+            for ($i = 0; $i -lt $read; $i += 2) { if ($buffer[$i] -ne 0) { return $true } }
+        }
+        $false
     } finally { $stream.Close() }
 }
 
@@ -125,7 +163,12 @@ if ($AlongsideBuild) {
 
 & 'C:\vmtest\files\demo.ps1' -Name 'tour' -Steps $stepsFile -Launch $exe 2>&1 | Select-Object -Last 3
 $takeFailed = -not (Test-Path 'C:\vmtest\rec\tour.keys.txt')
-if ($build -and -not $build.WaitForExit(600000)) { $problems += 'the build alongside was still going 10 minutes after the take'; Stop-Process -Id $build.Id -Force -ErrorAction SilentlyContinue }
+$buildFailed = $false
+if ($build) {
+    if (-not $build.WaitForExit(600000)) { $problems += 'the build alongside was still going 10 minutes after the take'; Stop-Process -Id $build.Id -Force -ErrorAction SilentlyContinue; $buildFailed = $true }
+    elseif ($build.ExitCode -ne 0) { $problems += "the build alongside failed, exit $($build.ExitCode)"; $buildFailed = $true }
+}
+$narratorGone = $Reader -eq 'Narrator' -and -not (Get-Process Narrator -ErrorAction SilentlyContinue)
 Get-Process QuickMail, Narrator, nvda -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep -Seconds 2
 
@@ -136,20 +179,28 @@ $endMs = (@($keyLines | Where-Object { $_ -match "`tend`t" })[0]).Split("`t")[0]
 $startMs = (@($keyLines | Where-Object { $_ -match "`tstart`t" })[0]).Split("`t")[0]
 $short = (([double]$endMs - [double]$startMs) / 1000) - (Get-WavSeconds 'C:\vmtest\rec\tour.wav')
 "recording is $([math]::Round($short, 2)) s shorter than the take"
-$speech = [ordered]@{ failed = @(); misplaced = 0; audioGaps = $(if ($short -gt 0.5) { 1 } else { 0 }) }
+$keys = Read-KeyLog $keyLines
+$speech = [ordered]@{ failed = @(); misplaced = 0; audioGaps = $(if ($short -gt 0.5) { 1 } else { 0 }); audioShortSeconds = [math]::Round($short, 2); steps = $keys.Keys.Count }
 $latency = $null
+if ($narratorGone) { $speech.failed = @('Narrator had stopped by the end of the take') }
+elseif ($Reader -eq 'Narrator' -and -not (Test-WavHasSound 'C:\vmtest\rec\tour.wav')) { $speech.failed = @('the recording has no sound') }
+if ($null -ne $keys.ClockMoved -and [math]::Abs($keys.ClockMoved) -gt 0.5) {
+    # Speech can't be lined up against the keys, so no speech figures: the criteria call that incomplete.
+    'WORKLOAD ' + ([ordered]@{ ran = $true; speech = $null; latency = $null; problems = @(@($problems) + "the VM's clock moved $([math]::Round($keys.ClockMoved, 2)) s during the take") } | ConvertTo-Json -Compress -Depth 4)
+    exit 0
+}
 if ($Reader -eq 'NVDA') {
-    $keys = Read-KeyLog $keyLines
     # With sharing allowed, because NVDA's log can't be read any other way while it's still open.
     $stream = [IO.File]::Open($logFile, 'Open', 'Read', 'ReadWrite, Delete')
     try { $buffer = New-Object IO.MemoryStream; $stream.CopyTo($buffer); $bytes = $buffer.ToArray() } finally { $stream.Close() }
     $text =[Text.Encoding]::UTF8.GetString($bytes, [math]::Min($keys.LogPosition, $bytes.Length), $bytes.Length - [math]::Min($keys.LogPosition, $bytes.Length))
-    $spoken = @(Read-SpeechTimes ($text -split "`r?`n") | ForEach-Object { $_ - $keys.Zero })
-    $m = Measure-Speech -KeySeconds $keys.Keys -SpeechSeconds $spoken -StepSeconds $StepSeconds
+    $spoken = @(Read-SpeechTimes ($text -split "`r?`n") | ForEach-Object { ConvertTo-TakeSeconds $_ $keys.Zero })
+    $last = if ($null -ne $keys.EndSeconds) { [double]$keys.EndSeconds } else { [double]::MaxValue }
+    $m = Measure-Speech -KeySeconds $keys.Keys -SpeechSeconds $spoken -StepSeconds $StepSeconds -EndSeconds $last
     "$($keys.Keys.Count) keys, $($spoken.Count) utterances, $($m.Failed.Count) silent, median $($m.MedianMs) ms"
     $speech.failed = @($m.Failed)
     $speech.misplaced = $m.Misplaced
     if ($null -ne $m.MedianMs) { $latency = [ordered]@{ medianMs = $m.MedianMs; worstMs = $m.WorstMs } }
 }
-'WORKLOAD ' + ([ordered]@{ ran = $true; speech = $speech; latency = $latency; problems = @($problems) } | ConvertTo-Json -Compress -Depth 4)
+'WORKLOAD ' + ([ordered]@{ ran = (-not $buildFailed); speech = $speech; latency = $latency; problems = @($problems) } | ConvertTo-Json -Compress -Depth 4)
 exit 0

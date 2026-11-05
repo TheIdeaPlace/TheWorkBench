@@ -193,6 +193,26 @@ Describe 'the criteria' {
             (Check $checks 2).Result | Should Be 'Incomplete'
             Test-ChecksPass $checks | Should Be $false
         }
+        It 'fails one run gone badly wrong, even with a good median' {
+            $s = { param($n) [pscustomobject]@{ failed = @(1..$n | ForEach-Object { "step $(15 + 16 * $_) silent" }); misplaced = 0; audioGaps = 0 } }
+            $base = New-Run -Config 'MemEval-12' -Speech (& $s 14)
+            $runs = (New-Run -Speech (& $s 14)), (New-Run -Speech (& $s 14)), (New-Run -Speech (& $s 85))
+            (Check (Run-Criteria $runs $base) 2).Result | Should Be 'Fail'
+        }
+        It 'fails one run far slower than the rest, as an intermittent shortage would be' {
+            $runs = (New-Run -Duration 100), (New-Run -Duration 100), (New-Run -Duration 300)
+            (Check (Run-Criteria $runs (New-Run -Config 'MemEval-12' -Duration 100)) 5).Result | Should Be 'Fail'
+        }
+        It 'fails one run with far worse latency' {
+            $l = { param($m, $w) New-Run -Latency ([pscustomobject]@{ medianMs = $m; worstMs = $w }) }
+            $runs = (& $l 70 200), (& $l 70 200), (& $l 70 5000)
+            (Check (Run-Criteria $runs (New-Run -Config 'MemEval-12' -Latency ([pscustomobject]@{ medianMs = 70; worstMs = 200 }))) 6).Result | Should Be 'Fail'
+        }
+        It 'says how many runs it compared, so one run against the worst of two Control runs is plain' {
+            $s = [pscustomobject]@{ failed = @(); misplaced = 0; audioGaps = 0 }
+            $control2 = (New-Run -Config 'MemEval-12' -Speech $s), (New-Run -Config 'MemEval-12' -Speech $s)
+            (Check (Run-Criteria (New-Run -Speech $s) $control2) 2).Detail | Should Match '1 run\(s\) against 2 at Control'
+        }
         It 'treats a limit with no time, a step never reached, as Incomplete' {
             $none = [pscustomobject]@{ name = 'x'; limit = 30; actual = $null }
             (Check (Run-Criteria (New-Run -Limits @($none)) (New-Run -Config 'MemEval-12' -Limits @([pscustomobject]@{ name = 'x'; limit = 30; actual = 5 }))) 4).Result | Should Be 'Incomplete'
@@ -260,8 +280,8 @@ Describe 'the criteria' {
         $speech = [pscustomobject]@{ failed = @(); misplaced = 0; audioGaps = 0 }
         $controlSpeech = New-Run -Config 'MemEval-12' -Speech ([pscustomobject]@{ failed = @('step 3'); misplaced = 0; audioGaps = 0 })
         It 'passes matching speech' { (Check (Run-Criteria (New-Run -Speech $speech) $controlSpeech) 2).Result | Should Be 'Pass' }
-        It 'fails a step failing only here' {
-            (Check (Run-Criteria (New-Run -Speech ([pscustomobject]@{ failed = @('step 9'); misplaced = 0; audioGaps = 0 })) $controlSpeech) 2).Result | Should Be 'Fail'
+        It 'fails a recording with no sound, the one sign Narrator stopped speaking' {
+            (Check (Run-Criteria (New-Run -Speech ([pscustomobject]@{ failed = @('the recording has no sound', 'x', 'y', 'z'); misplaced = 0; audioGaps = 0 })) (New-Run -Config 'MemEval-12' -Speech ([pscustomobject]@{ failed = @(); misplaced = 0; audioGaps = 0 }))) 2).Result | Should Be 'Fail'
         }
         It 'passes a step failing in Control too' {
             (Check (Run-Criteria (New-Run -Speech ([pscustomobject]@{ failed = @('step 3'); misplaced = 0; audioGaps = 0 })) $controlSpeech) 2).Result | Should Be 'Pass'
@@ -270,9 +290,19 @@ Describe 'the criteria' {
             $base = New-Run -Config 'MemEval-12' -Speech ([pscustomobject]@{ failed = @('step 60 silent', 'step 61 silent'); misplaced = 0; audioGaps = 0 })
             (Check (Run-Criteria (New-Run -Speech ([pscustomobject]@{ failed = @('step 76 silent', 'step 77 silent'); misplaced = 0; audioGaps = 0 })) $base) 2).Result | Should Be 'Pass'
         }
-        It 'fails a silent step at a place in the tour Control never goes silent' {
+        It 'fails a place in the tour that goes silent every time round, where Control never does' {
             $base = New-Run -Config 'MemEval-12' -Speech ([pscustomobject]@{ failed = @('step 60 silent'); misplaced = 0; audioGaps = 0 })
-            (Check (Run-Criteria (New-Run -Speech ([pscustomobject]@{ failed = @('step 3 silent'); misplaced = 0; audioGaps = 0 })) $base) 2).Detail | Should Match 'tour position 3'
+            $every = 0..4 | ForEach-Object { "step $(3 + 16 * $_) silent" }
+            (Check (Run-Criteria (New-Run -Speech ([pscustomobject]@{ failed = $every; misplaced = 0; audioGaps = 0 })) $base) 2).Detail | Should Match 'tour position 3'
+        }
+        It 'fails a stray place that Control has rarely, when here it goes silent every time round' {
+            $base = New-Run -Config 'MemEval-12' -Speech ([pscustomobject]@{ failed = @('step 12 silent'); misplaced = 0; audioGaps = 0 })
+            $every = 0..9 | ForEach-Object { "step $(12 + 16 * $_) silent" }
+            (Check (Run-Criteria (New-Run -Speech ([pscustomobject]@{ failed = $every; misplaced = 0; audioGaps = 0 })) $base) 2).Detail | Should Match 'tour position 12'
+        }
+        It 'allows for an occasional misplaced step, which Control has too' {
+            $base = New-Run -Config 'MemEval-12' -Speech ([pscustomobject]@{ failed = @(); misplaced = 1; audioGaps = 0 })
+            (Check (Run-Criteria (New-Run -Speech ([pscustomobject]@{ failed = @(); misplaced = 1; audioGaps = 0 })) $base) 2).Result | Should Be 'Pass'
         }
         It 'passes a stray silent step in one run of three' {
             $base = New-Run -Config 'MemEval-12' -Speech ([pscustomobject]@{ failed = @('step 15 silent'); misplaced = 0; audioGaps = 0 })
@@ -280,10 +310,10 @@ Describe 'the criteria' {
             $stray = [pscustomobject]@{ failed = @('step 1 silent', 'step 15 silent'); misplaced = 0; audioGaps = 0 }
             (Check (Run-Criteria @((New-Run -Speech $stray), (New-Run -Speech $clean), (New-Run -Speech $clean)) $base) 2).Result | Should Be 'Pass'
         }
-        It 'fails a place that goes silent in most runs and never at Control' {
+        It 'fails a place that goes silent repeatedly in most runs and never at Control' {
             $base = New-Run -Config 'MemEval-12' -Speech ([pscustomobject]@{ failed = @('step 15 silent'); misplaced = 0; audioGaps = 0 })
             $clean = [pscustomobject]@{ failed = @('step 15 silent'); misplaced = 0; audioGaps = 0 }
-            $stray = [pscustomobject]@{ failed = @('step 1 silent', 'step 15 silent'); misplaced = 0; audioGaps = 0 }
+            $stray = [pscustomobject]@{ failed = @((0..4 | ForEach-Object { "step $(1 + 16 * $_) silent" }) + 'step 15 silent'); misplaced = 0; audioGaps = 0 }
             (Check (Run-Criteria @((New-Run -Speech $stray), (New-Run -Speech $stray), (New-Run -Speech $clean)) $base) 2).Detail | Should Match 'tour position 1'
         }
         It 'scales the silent-step allowance with a long tour, as Control itself varies by about 11%' {
@@ -295,7 +325,7 @@ Describe 'the criteria' {
         It 'fails far more silent steps than Control, even at places Control goes silent' {
             $base = New-Run -Config 'MemEval-12' -Speech ([pscustomobject]@{ failed = @('step 15 silent', 'step 16 silent'); misplaced = 0; audioGaps = 0 })
             $many = 1..8 | ForEach-Object { "step $(15 + 16 * $_) silent" }
-            (Check (Run-Criteria (New-Run -Speech ([pscustomobject]@{ failed = $many; misplaced = 0; audioGaps = 0 })) $base) 2).Detail | Should Match 'steps silent, against at most 2'
+            (Check (Run-Criteria (New-Run -Speech ([pscustomobject]@{ failed = $many; misplaced = 0; audioGaps = 0 })) $base) 2).Detail | Should Match 'steps silent in the worst run, against at most 2'
         }
         It 'fails a VM where every step is silent, the bad-Clean case' {
             $base = New-Run -Config 'MemEval-12' -Speech ([pscustomobject]@{ failed = @('step 15 silent'); misplaced = 0; audioGaps = 0 })
@@ -342,8 +372,8 @@ Describe 'the criteria' {
             $spread = (New-Run -Config 'MemEval-12' -Duration 100), (New-Run -Config 'MemEval-12' -Duration 100), (New-Run -Config 'MemEval-12' -Duration 130)
             (Check (Run-Criteria (New-Run -Duration 125) $spread) 5).Result | Should Be 'Pass'
         }
-        It 'judges the median, so one slow run doesn''t decide it' {
-            $runs = (New-Run -Duration 100), (New-Run -Duration 100), (New-Run -Duration 500)
+        It 'judges the median, so a run slightly slow doesn''t decide it' {
+            $runs = (New-Run -Duration 100), (New-Run -Duration 100), (New-Run -Duration 150)
             (Check (Run-Criteria $runs $control) 5).Result | Should Be 'Pass'
         }
         It 'fails when most runs are slow' {
@@ -480,6 +510,16 @@ Describe 'several VMs at once' {
     It 'gives the slowdown against running alone' {
         ((Test-TogetherRuns -Runs @((Together 'a' -duration 700)) -AloneSeconds @{ W7 = 350 }).Slowdowns)[0].Ratio | Should Be 2
     }
+    It 'warns about what a single VM''s criteria would fail, even when the PC coped' {
+        $hot = Together 'a'
+        $hot | Add-Member guest ([pscustomobject]@{ PeakCommitPercent = 91.3 })
+        $r = Test-TogetherRuns -Runs @($hot)
+        $r.Pass | Should Be $true
+        $r.Warnings -join ' ' | Should Match '91.3% commit'
+    }
+    It 'warns when a VM has no counters' {
+        (Test-TogetherRuns -Runs @((Together 'a'))).Warnings -join ' ' | Should Match 'no counters'
+    }
     It 'says when the CPU was close to full' {
         (Test-TogetherRuns -Runs @((Together 'a' -cpu 99))).CpuBusy | Should Be $true
     }
@@ -553,6 +593,26 @@ Describe 'the smallest passing size' {
         $r = Get-WorkloadResult -Runs (@($bad) + @($same)) -Workload 'W3' -HostName 'PC1'
         $r.ControlProblem | Should Match 'at least half'
         $null -eq $r.SmallestGB | Should Be $true
+    }
+    It 'never drops a short run that had failed tests' {
+        $full = 1..3 | ForEach-Object { New-Run -Config 'MemEval-12' -TestsTotal 5932 }
+        $here = @(1..3 | ForEach-Object { New-Run -TestsTotal 5932 }) + (New-Run -TestsTotal 1800 -FailedTests 'A', 'B')
+        (Get-WorkloadResult -Runs (@($full) + @($here)) -Workload 'W7' -HostName 'PC1').Sizes[0].Pass | Should Be $false
+    }
+    It 'doesn''t crash on a too-small VM whose only run stopped early' {
+        $full = 1..3 | ForEach-Object { New-Run -Config 'MemEval-12' -TestsTotal 5932 }
+        $r = Get-WorkloadResult -Runs (@($full) + (New-Run -Config 'MemEval-2' -TestsTotal 100)) -Workload 'W7' -HostName 'PC1'
+        $r.Sizes[0].Reason | Should Match 'stopped early'
+    }
+    It 'says a size is only an upper limit when a smaller one wasn''t judged' {
+        $r = Get-WorkloadResult -Runs (@($control) + @(Three 'MemEval-6') + @(1..2 | ForEach-Object { New-Run -Config 'MemEval-4' })) -Workload 'W7' -HostName 'PC1'
+        $r.SmallestGB | Should Be 6
+        $r.UpperLimitOnly | Should Be $true
+    }
+    It 'judges nothing against a Control that can''t speak' {
+        $mute = [pscustomobject]@{ failed = @(1..80 | ForEach-Object { "step $_ silent" }); misplaced = 0; audioGaps = 0; steps = 86 }
+        $bad = 1..3 | ForEach-Object { New-Run -Workload 'W4' -Config 'MemEval-12' -Speech $mute }
+        (Get-WorkloadResult -Runs @($bad) -Workload 'W4' -HostName 'PC1').ControlProblem | Should Match 'silent'
     }
     It 'judges nothing against a Control that ran no tests' {
         $bad = 1..3 | ForEach-Object { New-Run -Config 'MemEval-12' -TestsTotal 0 }
@@ -722,6 +782,11 @@ Describe 'reading a test results file' {
         $r.Total | Should Be 2
         @($r.Failed) -join ',' | Should Be 'Bad'
     }
+    It 'counts Timeout and Aborted as failures, and a skip as not' {
+        $trx = Join-Path $TestDrive 't.trx'
+        Set-Content $trx '<TestRun><Results><UnitTestResult testName="A" outcome="Timeout" /><UnitTestResult testName="B" outcome="Aborted" /><UnitTestResult testName="C" outcome="NotExecuted" /></Results><ResultSummary><Counters total="3" /></ResultSummary></TestRun>'
+        @((Read-TrxResult $trx).Failed) -join ',' | Should Be 'A,B'
+    }
     It 'copes with a run where nothing failed' {
         $trx = Join-Path $TestDrive 'ok.trx'
         Set-Content $trx '<TestRun><Results><UnitTestResult testName="Good" outcome="Passed" /></Results><ResultSummary><Counters total="1" /></ResultSummary></TestRun>'
@@ -762,6 +827,38 @@ Describe 'reading a speech take' {
     }
     It 'gives no latency, not a good one, when nothing was said at all' {
         $null -eq (Measure-Speech -KeySeconds 2 -SpeechSeconds @()).MedianMs | Should Be $true
+    }
+    It 'keeps speech that runs past midnight in the right step' {
+        ConvertTo-TakeSeconds 1 86390 | Should Be 11
+        @((Measure-Speech -KeySeconds 5 -SpeechSeconds (ConvertTo-TakeSeconds 86396 86390) -EndSeconds 10).Failed).Count | Should Be 0
+    }
+    It 'notices the clock moving during a take' {
+        $k = Read-KeyLog @("0`tclock`t10:00:00.000`t2026-11-04", "60000`tclockend`t10:01:10.000")
+        $k.ClockMoved | Should Be 10
+    }
+    It 'gives no clock movement when the clock kept time' {
+        (Read-KeyLog @("0`tclock`t10:00:00.000`t2026-11-04", "60000`tclockend`t10:01:00.000")).ClockMoved | Should Be 0
+    }
+    It 'ends the last step with the take, so closing the app isn''t its speech' {
+        @((Measure-Speech -KeySeconds 2 -SpeechSeconds 30 -EndSeconds 10).Failed) -join ',' | Should Be 'step 1 silent'
+    }
+    It 'counts a real backlog as silence moving along the tour, which the criteria compare' {
+        # Every key's speech arrives after the next key: each step gets the one before's, and the first none.
+        $m = Measure-Speech -KeySeconds 2, 5.6, 9.2, 12.8 -SpeechSeconds 5.7, 9.3, 12.9, 16.5 -EndSeconds 20
+        @($m.Failed) -join ',' | Should Be 'step 1 silent'
+    }
+    It 'treats brackets in what was said as speech, and a command''s as not' {
+        @(Read-SpeechTimes @("IO - speech.speech.speak (10:00:02.500) - M (1):", "Speaking ['Inbox (3)']")).Count | Should Be 1
+        @(Read-SpeechTimes @("IO - speech.speech.speak (10:00:02.500) - M (1):", "Speaking [LangChangeCommand ('en_US'), CancellableSpeech (still valid)]")).Count | Should Be 0
+    }
+    It 'tells a silent recording from one with sound' {
+        $quiet = Join-Path $TestDrive 'q.wav'; $loud = Join-Path $TestDrive 'l.wav'
+        $bytes = New-Object byte[] 2044
+        [IO.File]::WriteAllBytes($quiet, $bytes)
+        $bytes[1000] = 7
+        [IO.File]::WriteAllBytes($loud, $bytes)
+        Test-WavHasSound $quiet | Should Be $false
+        Test-WavHasSound $loud | Should Be $true
     }
     It 'reads a recording''s length from its header' {
         $wav = Join-Path $TestDrive 'a.wav'

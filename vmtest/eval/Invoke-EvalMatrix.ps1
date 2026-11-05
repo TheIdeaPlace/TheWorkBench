@@ -41,12 +41,27 @@ function Initialize-Size([string]$C) {
     & (Join-Path $PSScriptRoot 'Install-EvalRig.ps1') -Config $C @arguments | ForEach-Object { Write-Host "  $_" }
 }
 
-# Hand back any eval VM a run left locked, say because whatever started it was killed. No other run can
-# be going, since each host only runs one of these at a time, and waiting on one would never end.
+# Only one of these on a PC at a time. After a dropped connection the first can still be going there, and
+# a second would hand back the VM it's using, which would read as that size failing.
+$ownerFile = Join-Path (Get-EvalDataRoot) 'matrix-owner.txt'
+if (Test-Path $ownerFile) {
+    $owner = Get-Process -Id ([int](Get-Content $ownerFile -Raw)) -ErrorAction SilentlyContinue
+    if ($owner -and $owner.ProcessName -eq 'powershell') { throw "Another copy of this is running on this PC (process $($owner.Id)). Wait for it, or stop it first." }
+}
+New-Item (Split-Path $ownerFile) -ItemType Directory -Force | Out-Null
+Set-Content $ownerFile $PID -Encoding ASCII
+
+# Hand back any eval VM a run left locked, say because whatever started it was killed. Each run notes its
+# process beside the lock, so one that's still going is left alone.
 function Clear-StrandedRuns {
     foreach ($file in Get-ChildItem (Join-Path $env:LOCALAPPDATA 'vmtest') -Filter 'lock-MemEval-*.json' -ErrorAction SilentlyContinue) {
         $lock = Get-Content $file.FullName -Raw | ConvertFrom-Json
         if ($lock.repo -ne 'MemEval') { continue }
+        $runOwner = Join-Path (Get-EvalDataRoot) "run-owner-$($file.BaseName -replace '^lock-', '').txt"
+        if (Test-Path $runOwner) {
+            $alive = Get-Process -Id ([int](Get-Content $runOwner -Raw)) -ErrorAction SilentlyContinue
+            if ($alive -and $alive.ProcessName -eq 'powershell') { throw "$($file.BaseName -replace '^lock-', '') is still in use by a run (process $($alive.Id)). Wait for it, or stop it first." }
+        }
         Write-Host "Handing back $($file.BaseName -replace '^lock-', ''), left by $($lock.branch)"
         $tool = if ($ToolPath) { $ToolPath } elseif (Test-Path 'C:\vmtest-tool\vmtest.ps1') { 'C:\vmtest-tool\vmtest.ps1' } else { Join-Path (Split-Path $PSScriptRoot) 'vmtest.ps1' }
         $r = Invoke-EvalVmTest -ToolPath $tool -Pool @(Get-EvalConfigs | ForEach-Object Name) -Arguments @('end', '-Repo', 'MemEval', '-Branch', $lock.branch)
@@ -88,10 +103,17 @@ function Complete-Sizes([string]$W, [string[]]$Sizes, [int]$Need) {
     foreach ($size in $Sizes) { Initialize-Size $size }
     # The suite's early stops use up attempts without being anyone's fault, so it gets more of them.
     $limit = $Need + 1 + $MaxExtraRuns + $(if (Test-EvalStopsEarly $W) { 4 } else { 0 })
+    $lastRecorded = -1
+    $noRecord = 0
     while ($true) {
         $next = @($Sizes | Where-Object { (Get-Counted $W $_) -lt $Need -and (Get-Tried $W $_) -lt $limit } |
             Sort-Object { Get-Counted $W $_ } | Select-Object -First 1)
         if (-not $next.Count) { break }
+        # A run that dies before leaving a record, or a VM that's never ready, would otherwise repeat forever.
+        $recorded = @(Get-Runs).Count
+        if ($recorded -eq $lastRecorded) { $noRecord++ } else { $noRecord = 0 }
+        $lastRecorded = $recorded
+        if ($noRecord -ge 5) { throw "$next hasn't left a usable record in 5 tries, so this is stopping." }
         if (Test-OutOfTime) { Write-Host "Stopping after $MaxMinutes minutes. Run this again to carry on."; exit 0 }
         [void](Invoke-One $W $next[0])
     }
