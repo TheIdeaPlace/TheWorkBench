@@ -129,9 +129,9 @@ The kit can't judge these. Try them on a pool VM, now at 6 GB:
 
 ## What changed, and what's left
 
-- **Pool VMs:** set to 2 / 4 / 6 GB in place, with Clean retaken at that size. No VM was rebuilt. All three on THESTADIUM are done, and `ClaudeTesting` and `ClaudeTesting-3` on the Surface. `ClaudeTesting-2` on the Surface was in use, so it was still 2 / 4 / 8 GB when this was written.
-- **The old Clean** is kept on each VM as `Clean-before-6GB`, as a way back. While it's there, `vmtest prepare -Pool -Force` treats those VMs as having saved state and won't remake them. Remove it once you're happy.
+- **Pool VMs:** set to 2 / 4 / 6 GB in place, with Clean retaken at that size. No VM was rebuilt. All six are done.
+- **The old Clean** was removed once the change was accepted, so going back means setting the old sizes and retaking Clean. `ClaudeTesting-3` on the Surface may still have its copy, `Clean-before-6GB`, because it was in use for an audio tour. While that's there, `vmtest prepare -Pool -Force` treats that VM as having saved state and won't remake it.
 - **Task checkpoints** keep their old memory settings until they end. A task restored from one runs at its old size until then.
 - **Hyper-V Manage:** in its main branch, new VMs get 2 GB over startup, at least 6 GB. It reaches a release with the next version after 0.9.7. Only a 4 GB startup was measured, so "2 GB over" for larger VMs is a judgment.
 - **`Test-RoomToStart`** still counts startup only, so three VMs can ask for 18 GB when it has only checked for 4 GB each.
-- **Remove the eval VMs** when the Surface's runs are done. They're saved or off, using disk only.
+- **The eval VMs are gone** from both hosts, along with the payload. The Surface's remaining runs, JAWS and any re-run need them made again: `New-EvalPayload.ps1`, `New-EvalVMs.ps1` and `Install-EvalRig.ps1`, about 15 minutes per VM. The run records are kept in `%LOCALAPPDATA%\vmtest\eval` on each host.
