@@ -12,7 +12,11 @@ It adds its own VMs and never changes the pool's. Results go in
 | `VmMemEval.psm1` | The sizes, the success criteria and the decision rules. Touches nothing, so it's fully tested (`..\tests\VmMemEval.Tests.ps1`). |
 | `New-EvalVMs.ps1` | Makes the `MemEval-*` VMs, each with its own memory settings and its own Clean. |
 | `Invoke-EvalRun.ps1` | One measured run: take a VM from Clean, run a workload with the counters on, record it, hand the VM back. |
-| `Invoke-OnEvalHost.ps1` | Runs either of those here or on another PC. |
+| `New-EvalPayload.ps1` | Gathers the source and installers the rig needs, from git and the app's releases. |
+| `Install-EvalRig.ps1` | Installs those into each VM's Clean, and checks a short NVDA take produces speech. |
+| `Invoke-EvalMatrix.ps1` | Works through a workload's sizes, starting at 4 GB, and carries on from what's recorded. |
+| `Invoke-EvalTogether.ps1` | Runs several 4 GB VMs at once, to see how many a PC can take. |
+| `Invoke-OnEvalHost.ps1` | Runs any of those here or on another PC, sends the payload, or fetches a PC's runs. |
 | `Measure-Host.ps1` | Logs every running VM's memory and the PC's load to a CSV. |
 | `Set-HostWatch.ps1` | Keeps `Measure-Host.ps1` running for days, to watch real work. |
 | `guest\*.ps1` | Start and stop the VM's own performance log. |
@@ -24,8 +28,16 @@ It adds its own VMs and never changes the pool's. Results go in
 # Make the VMs, on this PC or another (a few minutes each).
 .\Invoke-OnEvalHost.ps1 -Script New-EvalVMs -Computer THESTADIUM -Parameters @{ Config = 'MemEval-12', 'MemEval-4' }
 
-# One measured run.
-.\Invoke-OnEvalHost.ps1 -Script Invoke-EvalRun -Computer THESTADIUM -Parameters @{ Workload = 'W0'; Config = 'MemEval-4'; Repeat = 1 }
+# Install what the workloads need, once per VM.
+.\New-EvalPayload.ps1
+.\Invoke-OnEvalHost.ps1 -PayloadTo THESTADIUM
+.\Invoke-OnEvalHost.ps1 -Script Install-EvalRig -Computer THESTADIUM -Parameters @{ Config = 'MemEval-12', 'MemEval-4' }
+
+# Work through workloads, stopping between runs after 90 minutes. Run it again to carry on.
+.\Invoke-OnEvalHost.ps1 -Script Invoke-EvalMatrix -Computer THESTADIUM -Parameters @{ Workload = 'W7', 'W4'; MaxMinutes = 90 }
+
+# Several VMs at once.
+.\Invoke-OnEvalHost.ps1 -Script Invoke-EvalTogether -Computer THESTADIUM -Parameters @{ Workload = 'W7', 'W4', 'W2' }
 
 # Watch real work on this PC, then stop.
 .\Set-HostWatch.ps1

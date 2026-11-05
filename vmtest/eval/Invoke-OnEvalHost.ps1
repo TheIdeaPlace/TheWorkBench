@@ -13,13 +13,15 @@ see both hosts.
 #>
 [CmdletBinding(DefaultParameterSetName = 'Run')]
 param(
-    [Parameter(Mandatory, ParameterSetName = 'Run')][ValidateSet('New-EvalVMs', 'Invoke-EvalRun', 'Set-HostWatch')][string]$Script,
+    [Parameter(Mandatory, ParameterSetName = 'Run')][ValidateSet('New-EvalVMs', 'Install-EvalRig', 'Invoke-EvalRun', 'Invoke-EvalMatrix', 'Invoke-EvalTogether', 'Set-HostWatch')][string]$Script,
     [Parameter(ParameterSetName = 'Run')][hashtable]$Parameters = @{},
     [Parameter(ParameterSetName = 'Run')][Parameter(Mandatory, ParameterSetName = 'Collect')][string]$Computer,
-    [Parameter(Mandatory, ParameterSetName = 'Collect')][switch]$CollectRuns
+    [Parameter(Mandatory, ParameterSetName = 'Collect')][switch]$CollectRuns,
+    [Parameter(Mandatory, ParameterSetName = 'Payload')][string]$PayloadTo
 )
 
 $ErrorActionPreference = 'Stop'
+if ($PayloadTo) { $Computer = $PayloadTo }
 if (-not $Computer) {
     & (Join-Path $PSScriptRoot "$Script.ps1") @Parameters
     exit $LASTEXITCODE
@@ -39,6 +41,24 @@ foreach ($attempt in 1..6) {
     }
 }
 try {
+    if ($PayloadTo) {
+        # Remoting copies large files very slowly, so what's already there is kept: this can be run
+        # again after a dropped connection. Smallest first, and only this PC's kind of installer.
+        $remote = Invoke-Command -Session $session -ScriptBlock {
+            $p = Join-Path $env:LOCALAPPDATA 'vmtest\eval\payload'
+            New-Item $p -ItemType Directory -Force | Out-Null
+            [pscustomobject]@{ Path = $p; Arch = $env:PROCESSOR_ARCHITECTURE; Sizes = @(Get-ChildItem $p -File | ForEach-Object { "$($_.Name)|$($_.Length)" }) }
+        }
+        $there = $remote.Path
+        $skip = if ($remote.Arch -eq 'ARM64') { '*-win.msi' } else { '*-arm64.msi' }
+        foreach ($f in Get-ChildItem (Join-Path $env:LOCALAPPDATA 'vmtest\eval\payload') -File | Where-Object { $_.Name -notlike $skip -and $_.Name -ne 'ffmpeg.exe' } | Sort-Object Length) {
+            if (@($remote.Sizes) -contains "$($f.Name)|$($f.Length)") { continue }
+            Write-Host "Copying $($f.Name) to $Computer"
+            Copy-Item $f.FullName -Destination $there -ToSession $session -Force
+        }
+        "Payload is at $there on $Computer."
+        return
+    }
     if ($CollectRuns) {
         # By the PC's own name, which is what its folder is called, whatever name reached it here.
         $found = Invoke-Command -Session $session -ScriptBlock {
@@ -60,6 +80,12 @@ try {
         $t
     }
     Get-ChildItem $PSScriptRoot -Force | ForEach-Object { Copy-Item $_.FullName -Destination $target -ToSession $session -Recurse -Force }
+    # The recording rig's scripts live in audio-demo, which the other PC doesn't have.
+    $audio = Join-Path $PSScriptRoot '..\..\audio-demo\vm'
+    if (Test-Path $audio) {
+        Invoke-Command -Session $session -ArgumentList "$target\audio-demo-vm" -ScriptBlock { param($p) New-Item $p -ItemType Directory -Force | Out-Null }
+        Get-ChildItem $audio -File | ForEach-Object { Copy-Item $_.FullName -Destination "$target\audio-demo-vm" -ToSession $session -Force }
+    }
     try {
         Invoke-Command -Session $session -ArgumentList $target, $Script, $Parameters -ScriptBlock {
             param($t, $name, $p)
