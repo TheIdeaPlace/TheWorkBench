@@ -1,12 +1,12 @@
 # VM memory evaluation
 
-**Status: THESTADIUM's results are in, with gaps listed below. The Surface is partly done. Nothing has been changed on the pool's VMs.** How to run the kit is in [`../eval/README.md`](../eval/README.md).
+**Status: 6 GB is now the default. THESTADIUM's results are in, with gaps listed below, and the Surface's are partial.** How to run the kit is in [`../eval/README.md`](../eval/README.md).
 
-## The answer so far
+## The answer
 
-**8 GB isn't needed for anything measured. 4 GB passed everything measured on both hosts. I recommend a 6 GB maximum with one size for all, rather than 4 GB or tiers.**
+**8 GB isn't needed for anything measured. 4 GB passed everything measured on both hosts. The pools now use a 6 GB maximum with one size for all, rather than 4 GB or tiers.**
 
-| Setting | Today, THESTADIUM | Today, Surface | Recommended |
+| Setting | THESTADIUM before | Surface before | Now |
 |---|---|---|---|
 | Minimum | 2 GB | 2 GB | 2 GB |
 | Startup | 6 GB | 4 GB | 4 GB |
@@ -21,7 +21,7 @@ Why 6 GB when 4 GB passed:
 
 No tiers: the plan only allows them if they let a host run another VM or save 4 GB of host memory. Nothing measured needs more than about 5.5 GB, and light work doesn't use the extra, so a heavy tier would gain nothing.
 
-The Surface's settings shouldn't change until its remaining runs are done.
+The Surface moved to 6 GB before its remaining runs were done, because 6 GB is above everything measured there, even with 12 GB on offer, and the maximum is easy to raise again if the soak or JAWS shows a need.
 
 ## What was measured
 
@@ -79,7 +79,7 @@ The Surface wasn't tested this way. It's the tighter host, because the PC itself
 - **Surface:** W0, W9 and several VMs at once. A quiet window of a few hours would do it, and [#233](https://github.com/TheIdeaPlace/TheWorkBench/issues/233) would make that easier.
 - **A week of watching real work:** the permission check refused the scheduled task, so real-world peaks aren't known.
 - **Startup 2 GB against 4 GB:** not compared.
-- **The other half of W1 and W3:** Hyper-V Manage's Velopack first start has no release to install, and IDT's wx GUI tests and the visual probe weren't included.
+- **The other half of W1 and W3:** Hyper-V Manage's Velopack first start, IDT's wx GUI tests and the visual probe weren't included.
 - **W8 used a build instead of GreenMail's JVM.** The build overlaps the first few minutes of the tour, not all of it, and those runs didn't record whether it succeeded.
 - **W5 and the sound check:** the check that Narrator's recording has sound was added after W5 ran, so those runs show the capture kept up, not that Narrator spoke.
 - **Final speech script:** the sound and clock checks and the midnight handling have unit tests but haven't run in a VM, because other sessions had VMs running on THESTADIUM.
@@ -91,6 +91,7 @@ The Surface wasn't tested this way. It's the tighter host, because the PC itself
 
 - **QuickMail's suite stopped early on the Surface,** at 162, 1,828 and 4,529 of 5,932 tests, at both 4 GB and 12 GB. The 1,828 and 4,529 runs recorded no failed tests; the 162 run recorded one. It never did this on THESTADIUM in 8 runs. The cause wasn't recorded, and a test host crash can look exactly like this, so nothing here rules out a crash. It also means a passing VM run may not have run every test. The kit now records it as a failure if `dotnet test` fails with no failed test.
 - **Failures the same at every size:** QuickCalc fails 23 of 270 tests on both hosts, and The Chat Place 7 of 4,991 on the Surface.
+- **A Clean can capture Windows' "Get Started" window.** While it's open it takes focus from everything, so a program launched in that VM doesn't keep keyboard focus. One pool VM's new Clean had it, and retaking Clean cleared it. `vmtest prepare` doesn't check for this, so any VM's Clean could have it.
 
 ## How the criteria changed
 
@@ -114,22 +115,23 @@ The soak compares one 4 GB run with the worse of two Control runs, which leans t
 These are in `%LOCALAPPDATA%\vmtest\eval` on each host, marked thrown out with the reason. In each case the run says nothing about memory.
 
 - **W3, both hosts, all 12 first runs:** the VMs had no Visual C++ runtime, so wxPython couldn't load and the tests never ran. W3 was then re-run properly.
-- **W4 at 4 GB on THESTADIUM, 3 runs:** NVDA heard nothing at all on that VM, at 61 to 63% commit. Retaking its Clean fixed it, and the same size then spoke normally. The cause was never found. Lost focus was suspected and ruled out. The rig now checks that a Clean produces speech.
+- **W4 at 4 GB on THESTADIUM, 3 runs:** NVDA heard nothing at all on that VM, at 61 to 63% commit. Retaking its Clean fixed it, and the same size then spoke normally. The likely cause is the "Get Started" window above, seen later on another VM, but that Clean is gone so it can't be confirmed. The rig now checks that a Clean produces speech.
 - **W4 at 12 GB on the Surface, 2 runs:** one failed reading NVDA's log, a bug in the kit, and one was cut off when the session running it ended, which had its "troubled" mark cleared by hand as well.
 - **W0 at 4 GB on THESTADIUM, 1 run:** a short pilot left among the real runs.
 
 ## For you to check
 
-The kit can't judge these. Try them at the size you choose:
+The kit can't judge these. Try them on a pool VM, now at 6 GB:
 
-1. **Listen to a Narrator recording at the smaller size next to one at today's.** You should hear no stutters or cut-off speech.
+1. **Listen to a Narrator recording.** You should hear no stutters or cut-off speech.
 2. **Use the Surface with JAWS while two VMs run.** Speech should keep up with your typing.
-3. **Use a JAWS session in a VM at the smaller size.** It should feel the same as today.
+3. **Use a JAWS session in a VM.** It should feel the same as before.
 
-## If you go ahead
+## What changed, and what's left
 
-- **THESTADIUM's pool:** set 2 / 4 / 6 GB, retake Clean, and remake the copies. Task checkpoints keep their old settings until they end.
-- **`README.md:159`** says each VM uses about 4 GB. Measured, 2 to 3 GB for light work and up to 5.5 GB for heavy.
-- **`Test-RoomToStart`** counts startup only. With a 6 GB maximum that's a smaller risk, but three VMs can still ask for 18 GB.
-- **Hyper-V Manage's defaults** (`New-HyperVRdpVM.ps1:121,511` and `PowerShellHyperVService.cs:82-90`, in another repo) would give a new VM an 8 GB maximum.
+- **Pool VMs:** set to 2 / 4 / 6 GB in place, with Clean retaken at that size. No VM was rebuilt. All three on THESTADIUM are done, and `ClaudeTesting` and `ClaudeTesting-3` on the Surface. `ClaudeTesting-2` on the Surface was in use, so it was still 2 / 4 / 8 GB when this was written.
+- **The old Clean** is kept on each VM as `Clean-before-6GB`, as a way back. While it's there, `vmtest prepare -Pool -Force` treats those VMs as having saved state and won't remake them. Remove it once you're happy.
+- **Task checkpoints** keep their old memory settings until they end. A task restored from one runs at its old size until then.
+- **Hyper-V Manage:** in its main branch, new VMs get 2 GB over startup, at least 6 GB. It reaches a release with the next version after 0.9.7. Only a 4 GB startup was measured, so "2 GB over" for larger VMs is a judgment.
+- **`Test-RoomToStart`** still counts startup only, so three VMs can ask for 18 GB when it has only checked for 4 GB each.
 - **Remove the eval VMs** when the Surface's runs are done. They're saved or off, using disk only.
