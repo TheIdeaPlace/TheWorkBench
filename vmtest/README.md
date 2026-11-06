@@ -45,7 +45,8 @@ Settings can be changed with environment variables:
 | `VMTEST_RESERVE_GB` | Memory kept for this PC: a VM isn't started unless this much would still be free | `4` |
 | `VMTEST_USER`, `VMTEST_PASSWORD` | The VM's test account | `vmuser`, `vmadmin` |
 | `VMTEST_STATE` | The folder for the locks | `%LOCALAPPDATA%\vmtest` |
-| `VMTEST_HOST` | Another PC whose test VMs to use (see "Using VMs on another PC") | Unset: this PC's own |
+| `VMTEST_HOSTS` | The PCs whose test VMs to use, in order: `local` for this PC, and computer names (`local,HOSTNAME`) | This PC's own, plus each PC set up with `vmtest host` while on its network |
+| `VMTEST_HOST` | One other PC whose test VMs to use instead of this PC's (see "Using VMs on another PC") | Unset |
 | `VMTEST_HOST_PATH` | Where vmtest keeps its copy of itself on that PC | `C:\vmtest-tool` |
 
 ## Getting Claude sessions to use it
@@ -91,9 +92,11 @@ powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$env:VMTEST
 | `shot <file.png> [-FromHost]` | Takes a picture of the VM's screen. |
 | `save` | Checkpoints this task, parks the VM and frees it for other tasks. |
 | `end [-Force -VM name]` | Use after the work is merged. Deletes the task's checkpoints from every VM, and puts the VM it holds back to Clean. With `-Force`, it resets `-VM` (or the first VM) even if another task holds it. |
-| `status` | Lists each VM: its state, who has it and since when, when they last used it, and its checkpoints. |
+| `status` | Lists each VM, on every PC vmtest uses: its state, who has it and since when, when they last used it, and its checkpoints. |
+| `where [-Json]` | Says which PC and VM this task holds, where its saved checkpoints are, and how many VMs each PC has free. |
 | `prepare -Pool [-Force]` | Makes the pool's other VMs from the first VM's Clean. `-Force` remakes the ones made from an older Clean, except any a task is using or has saved state on. |
 | `host <computer>` | Sets up the test VMs on another PC for this one: checks it, saves your sign-in for it, and copies vmtest there. See "Using VMs on another PC". |
+| `host <computer> -AddNetwork` | Uses that PC's VMs on the network this PC is on now, too. |
 
 ### Rules worth knowing
 
@@ -180,11 +183,20 @@ Clean doesn't get Windows updates by itself. To refresh it, use a throwaway task
 
 ## Using VMs on another PC
 
-A PC that can't run the test VMs well (one without Hyper-V, or an Arm laptop testing x64 apps) can
-use the VMs of another Windows PC on the same network. That PC is the host. Commands run on its VMs
-over PowerShell remoting, and nothing else changes for you or for Claude.
+A PC can use the test VMs of another Windows PC on the same network, as well as its own or instead
+of them. That PC is the host. Commands run on its VMs over PowerShell remoting, and nothing else
+changes for you or for Claude. Two PCs with three VMs each make a pool of six.
 
-It's off unless you turn it on. With `VMTEST_HOST` unset, vmtest uses this PC's VMs, as above.
+It's off until you run `vmtest host` (below). After that, whenever this PC is on a network the host
+was set up on, vmtest uses both PCs' VMs:
+
+- `begin` takes a free VM on any of them. It tries the PC with this task's checkpoint first, then
+  the others, and only once no PC has a free VM does it save and take an idle one.
+- Every other command goes to the PC whose VM the task holds.
+- `status` lists every PC's VMs, and `where` says which PC and VM this task holds, and where its
+  checkpoints are.
+- `-HostName <computer>` (or `-HostName local`) keeps a command to one PC. `prepare` stays on this
+  PC unless it's given.
 
 ### On the host
 
@@ -216,15 +228,33 @@ It's off unless you turn it on. With `VMTEST_HOST` unset, vmtest uses this PC's 
      Windows account on this PC can read it;
    - copies vmtest to `C:\vmtest-tool` on the host (or `VMTEST_HOST_PATH`);
    - lists the host's VMs.
-3. Turn it on: `setx VMTEST_HOST HOSTNAME`, then restart Claude Code.
-4. To go back to this PC's own VMs, run this in PowerShell, then restart Claude Code:
-   `[Environment]::SetEnvironmentVariable('VMTEST_HOST', $null, 'User')`
-5. Run the command in step 2 again whenever the password changes.
+   - records the network this PC is on, so the host is used whenever this PC is on it again.
+3. That's all: the next vmtest command uses both PCs. Nothing needs restarting.
+4. To use the host on another network as well, run, once you're on it:
+   `powershell -NoProfile -ExecutionPolicy Bypass -File "$env:VMTEST_HOME\vmtest.ps1" host HOSTNAME -AddNetwork`
+   It checks the saved sign-in and asks for no password. A sign-in saved by an earlier vmtest has no
+   network recorded, so run this once for it too.
+5. To choose the PCs yourself, set `VMTEST_HOSTS`, for example `setx VMTEST_HOSTS local,HOSTNAME`,
+   then restart Claude Code. `local` alone means this PC's VMs only. To use only the host's VMs
+   (a PC without Hyper-V needs nothing: it uses the host alone already), `setx VMTEST_HOST HOSTNAME`.
+6. To stop using a host, delete `%LOCALAPPDATA%\vmtest\hosts\HOSTNAME.xml` and `HOSTNAME.json`.
+7. Run the command in step 2 again whenever the password changes.
+
+Which networks count: those on this PC's own network adapters, or on a Hyper-V external switch,
+which shares one. A VPN such as Tailscale, and Hyper-V's internal Default Switch, are connected
+wherever the PC is, so they don't count.
 
 ### What happens to each command
 
-- Every command except `host` goes to the host, with the same parameters, and comes back with the
-  same output and exit code.
+- Every command except `host` goes to the PC it's meant for (see above), with the same parameters,
+  and comes back with the same output and exit code. A command for this PC's VM runs here, without
+  the network.
+- `begin` starts its answer with the PC it chose, for example "On HOSTNAME: The test VM...". VMs on
+  different PCs can have the same name, so name the PC too when you tell someone which VM.
+- vmtest notes which PC each task's VM is on in `%LOCALAPPDATA%\vmtest\placed-*.json`, so commands
+  go straight there. If the note is out of date, it asks the other PCs. `end` removes it.
+- A PC that can't be reached is skipped, and the output says so. `end` leaves the task's checkpoint
+  there; run `end` again once it's back.
 - The task is still named from the repo and branch of the folder you run vmtest in, here.
 - Files on this PC are copied to the host first, then into the VM as usual: the folder or file for
   `deploy`, the file for `push`, and the script for `run -ScriptFile`. The copies on the host are
@@ -256,7 +286,11 @@ It's off unless you turn it on. With `VMTEST_HOST` unset, vmtest uses this PC's 
 - Two PCs with different versions of vmtest replace each other's copy on the host in turn. Keep
   them on the same version.
 - Outside a domain, the sign-in goes (by NTLM) to whatever PC answers to the host's name. On
-  another network, something else could answer to it, so turn `VMTEST_HOST` off away from home.
+  another network, something else could answer to it. That's why a host is only used on the
+  networks it was set up on. `VMTEST_HOSTS` and `VMTEST_HOST` don't check the network, so turn them
+  off away from home.
+- One VM per session holds across PCs: `begin` won't give a session a VM on one PC while it holds
+  one for another task on another.
 - `vmtest prepare -Pool` takes a few minutes per VM. It runs on the host; keep this PC awake until
   it finishes.
 

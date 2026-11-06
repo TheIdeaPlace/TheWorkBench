@@ -1,6 +1,6 @@
 ---
 name: vmtest
-description: Test a Windows desktop app inside a Hyper-V test VM instead of on the user's own PC, so the user's focus, keyboard and screen reader are never disturbed. Use whenever testing would open a window, even for a moment, send keys or clicks, read an app's accessibility tree, take a screenshot of an app, or install or uninstall software (MSI, winget, setup.exe) for a Windows app. That includes automated test suites (pytest, xUnit and so on) in which any test builds a GUI window. Only builds and tests that never create a window stay on the PC. Not needed for web pages, or for iOS or Mac apps.
+description: Test a Windows desktop app inside a Hyper-V test VM instead of on the user's own PC, so the user's focus, keyboard and screen reader are never disturbed. Use whenever testing would open a window, even for a moment, send keys or clicks, read an app's accessibility tree, take a screenshot of an app, or install or uninstall software (MSI, winget, setup.exe) for a Windows app. That includes automated test suites (pytest, xUnit and so on) in which any test builds a GUI window. Only builds and tests that never create a window stay on the PC. Also use it to answer questions about the test VMs, such as "show me my VM status", "which VMs are free", "who has the test VMs" or "where's my VM", across every PC that hosts them. Not needed for web pages, or for iOS or Mac apps.
 ---
 
 # Testing Windows apps in the test VM (vmtest)
@@ -30,11 +30,18 @@ every command works on the test VM your task holds.
 powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$env:VMTEST_HOME\vmtest.ps1" <command> [args]
 ```
 
-**The VMs may be on another PC.** When `VMTEST_HOST` is set, vmtest runs every command on that
-PC's test VMs over the network. Nothing changes for you: the commands, paths on this PC, output and
-exit codes are the same, and files and pictures are copied across for you. Messages may name that
-PC instead of "this PC". If one says there's no saved sign-in for it, give the user the command line
-it names to run in their own PowerShell window (it asks for a password, so you can't run it).
+**The VMs may be on several PCs.** vmtest uses this PC's test VMs and those of any other PC the
+user has set up with `vmtest host`, so the pool can be bigger than this PC's own VMs. vmtest
+handles it; don't pick a PC yourself:
+- `begin` takes a free VM on any PC, and its answer starts with the PC it chose ("On HOSTNAME: ...").
+  VMs on different PCs can share a name, so when you tell the user which VM you have, name the PC too.
+- Every other command goes to the PC holding your task's VM. Commands, paths on this PC, output and
+  exit codes are the same, and files and pictures are copied across for you.
+- `-HostName <computer>` (or `-HostName local`) keeps a command to one PC. Use it only when the user
+  asks for a particular PC.
+- If a PC can't be reached, vmtest skips it and says so. If a message says there's no saved sign-in
+  for a PC, give the user the command line it names to run in their own PowerShell window (it asks
+  for a password, so you can't run it).
 
 **Run every command from that same folder.** Between commands, the shell can go back to the
 folder the session started in, and vmtest run from another repo or branch is a different task: it
@@ -103,8 +110,24 @@ freedom stops at the VM itself.
    whenever you'll be away from the VM for a while, such as waiting on the user, so others can use it.
 6. After this task's work has merged, run `end`. It deletes this task's checkpoints and puts its VM back to Clean.
 
-`status` lists every VM, who holds it, whether that Claude session is still open, and when they
-last used it.
+## Questions about the VMs
+
+When the user asks about the VMs rather than for a test ("show me my VM status", "which VMs are
+free", "who has the test VMs", "where's my VM", "is the other PC's pool being used"), answer from
+vmtest, not from memory:
+
+- `status` lists every VM on every PC: its state, who holds it (repo and branch), whether that
+  Claude session is still open, when they last used it, and its checkpoints, with each PC's free
+  memory. It needs no task, so it works from any folder.
+- `where` says which PC and VM this folder's task holds, where its saved checkpoints are, and how
+  many VMs each PC has free.
+
+Summarize for the user rather than pasting the output: per PC, how many VMs are free, and for each
+one in use, the task, how long since it was used and whether its session is still open. Point out
+anything they may want to act on: a VM held by a closed session, or one idle for hours. Say that
+vmtest will save and hand on an idle VM by itself (see "Sharing the VMs with other sessions") rather
+than offering to take one. If a PC couldn't be reached, say so plainly. Don't change anything to
+answer a question: no `save`, `end` or `begin`.
 
 ## Running a repo's tests in the VM
 

@@ -1005,7 +1005,7 @@ Describe 'another PC (VMTEST_HOST)' {
     It 'says how to save a sign-in when there is none' {
         $before = $env:LOCALAPPDATA
         $env:LOCALAPPDATA = Join-Path $TestDrive 'appdata'
-        try { { InModuleScope VmTest { Get-HostCredential 'HOSTNAME' } } | Should Throw "clear VMTEST_HOST. To save a sign-in, run this once in your own PowerShell window: powershell" }
+        try { { InModuleScope VmTest { Get-HostCredential 'HOSTNAME' } } | Should Throw "clear VMTEST_HOST (or take HOSTNAME out of VMTEST_HOSTS). To save a sign-in, run this once in your own PowerShell window: powershell" }
         finally { $env:LOCALAPPDATA = $before }
     }
     Context 'what goes to the host' {
@@ -1095,6 +1095,34 @@ Describe 'another PC (VMTEST_HOST)' {
                 Invoke-VmTestOnHost -Command 'begin' -Parameters @{ Repo = 'Mine'; Branch = 'x' } | Out-Null
                 $global:HostRuns[0].Parameters.Repo | Should Be 'Mine'
                 $global:HostRuns[0].Parameters.Branch | Should Be 'x'
+            }
+            It "tries again when the host's name can't be resolved, but not for long" {
+                Use-FakeHost
+                $global:SessionTries = 0
+                Mock -ModuleName VmTest Start-Sleep {}
+                Mock -ModuleName VmTest New-PSSession { $global:SessionTries++; if ($global:SessionTries -lt 3) { throw 'The server name cannot be resolved.' }; 'host-session' }
+                Invoke-VmTestOnHost -Command 'status' -Parameters @{} | Out-Null
+                $global:SessionTries | Should Be 3
+                $global:SessionTries = 0
+                Mock -ModuleName VmTest New-PSSession { $global:SessionTries++; throw 'The server name cannot be resolved.' }
+                { Invoke-VmTestOnHost -Command 'status' -Parameters @{} } | Should Throw "Couldn't connect to HOSTNAME"
+                $global:SessionTries | Should Be 3
+                $global:SessionTries = 0
+                Mock -ModuleName VmTest New-PSSession { $global:SessionTries++; throw 'Access is denied.' }
+                { Invoke-VmTestOnHost -Command 'status' -Parameters @{} } | Should Throw 'Access is denied'
+                $global:SessionTries | Should Be 1
+                Mock -ModuleName VmTest New-PSSession { 'host-session' }
+            }
+            It 'with -ComputerName and -Routed, goes to that PC, tells it so, and never passes -HostName on' {
+                Use-FakeHost
+                Invoke-VmTestOnHost -Command 'begin' -Parameters @{ Repo = 'Mine'; Branch = 'x'; HostName = 'OTHERPC'; FreeOnly = $true } -ComputerName 'OTHERPC' -Routed | Out-Null
+                $run = $global:HostRuns[0]
+                $run.Parameters.ContainsKey('HostName') | Should Be $false
+                $run.Parameters.FreeOnly | Should Be $true
+                $run.Environment.VMTEST_ROUTED | Should Be '1'
+                Assert-MockCalled -ModuleName VmTest New-PSSession -Times 1 -Exactly -Scope It -ParameterFilter { $ComputerName -eq 'OTHERPC' }
+                Invoke-VmTestOnHost -Command 'status' -Parameters @{} | Out-Null
+                $global:HostRuns[1].Environment.ContainsKey('VMTEST_ROUTED') | Should Be $false
             }
             It 'deploy stages every file, hidden ones too, and removes the staging folder after' {
                 Use-FakeHost
@@ -1356,6 +1384,7 @@ Describe 'another PC (VMTEST_HOST)' {
         Mock -ModuleName VmTest New-HostSession { 'host-session' }
         Mock -ModuleName VmTest Remove-PSSession {}
         Mock -ModuleName VmTest Sync-HostTool { $true }
+        Mock -ModuleName VmTest Get-CurrentNetworks { @('HomeNet') }
         try {
             It "says what the host needs when it doesn't answer, and saves nothing" {
                 Mock -ModuleName VmTest Test-WSMan { throw 'The client cannot connect.' }
@@ -1370,15 +1399,25 @@ Describe 'another PC (VMTEST_HOST)' {
                 Test-Path $saved | Should Be $false
                 Assert-MockCalled -ModuleName VmTest Sync-HostTool -Times 0 -Exactly -Scope It
             }
-            It 'saves the sign-in once the checks pass, and says how to turn it on and off' {
+            It 'saves the sign-in and the network once the checks pass, and says what that means' {
                 Mock -ModuleName VmTest Test-WSMan {}
                 Mock -ModuleName VmTest Invoke-OnHost { @{ ok = $true; vms = @('ClaudeTesting'); me = 'HOSTNAME\you'; console = 'HOSTNAME\you' } }
                 $out = (Install-VmTestHost -ComputerName 'HOSTNAME' -Credential $cred) -join "`n"
                 (Import-Clixml $saved).UserName | Should Be 'HOSTNAME\you'
+                InModuleScope VmTest { Get-HostNetworks 'HOSTNAME' } | Should Be 'HomeNet'
                 $out | Should Match 'Its VMs: ClaudeTesting\.'
+                $out | Should Match "whenever this PC is on 'HomeNet', vmtest uses HOSTNAME's test VMs along with this PC's own"
                 $out | Should Match 'setx VMTEST_HOST HOSTNAME'
-                $out | Should Match ([regex]::Escape("[Environment]::SetEnvironmentVariable('VMTEST_HOST', `$null, 'User')"))
                 $out | Should Not Match 'Note:'
+            }
+            It '-AddNetwork adds the network this PC is on now, checking the saved sign-in and asking for no password' {
+                Mock -ModuleName VmTest Get-CurrentNetworks { @('Office') }
+                $out = (Add-VmTestHostNetwork -ComputerName 'HOSTNAME') -join "`n"
+                @(InModuleScope VmTest { Get-HostNetworks 'HOSTNAME' }) -join ',' | Should Be 'HomeNet,Office'
+                $out | Should Match "on 'HomeNet' or 'Office'"
+                Assert-MockCalled -ModuleName VmTest New-HostSession -Times 1 -Exactly -Scope It
+                Mock -ModuleName VmTest Get-CurrentNetworks { @() }
+                { Add-VmTestHostNetwork -ComputerName 'HOSTNAME' } | Should Throw "isn't connected to a network"
             }
             It "warns when the account isn't the one signed in at the host's screen" {
                 Mock -ModuleName VmTest Test-WSMan {}
@@ -1397,6 +1436,7 @@ Describe 'another PC (VMTEST_HOST)' {
         New-Item -ItemType Directory $stub -Force | Out-Null
         Copy-Item (Join-Path $root 'vmtest.ps1') $stub
         Set-Content (Join-Path $stub 'VmTest.psm1') @'
+function Get-VmTestHosts { @() }
 function Test-ForwardToHost { $true }
 function Invoke-VmTestOnHost {
     param($Command, $Parameters)
@@ -1424,6 +1464,361 @@ function Invoke-VmTestOnHost {
     }
     Remove-Item Env:\VMTEST_STATE, Env:\VMTEST_HOST_PATH
     Remove-Variable -Scope Global HostRuns, HostAnswer, PlanArgs, StubTool -ErrorAction SilentlyContinue
+}
+
+Describe 'several PCs (VMTEST_HOSTS)' {
+    $env:VMTEST_STATE = Join-Path $TestDrive 'several'
+    $first = $env:VMTEST_VM
+    $mine = Resolve-Task -Repo 'Mine' -Branch 'x'
+    $other = Resolve-Task -Repo 'Other' -Branch 'work'
+    $both = @('local', 'HOSTB')
+
+    # A fake world of PCs: what 'where' says on each, and how 'begin' answers there. A PC missing
+    # from it can't be reached.
+    function New-Where([string]$Holds, [string[]]$CheckpointOn = @(), [object[]]$Session = @(), [switch]$Taken, [int]$Free = 1) {
+        [pscustomobject]@{ computer = 'X'; repo = 'Mine'; branch = 'x'; taskError = $null; vms = 3; free = $Free; holds = [string]$Holds
+            checkpointOn = @($CheckpointOn); taken = [bool]$Taken; session = @($Session) }
+    }
+    $global:ReadyBegin = { param($q) @{ code = 0; out = "The test VM 'V' is ready for Mine / x, started from Clean." } }
+    $global:BusyBegin = { param($q) @{ code = 1; busy = $true; out = 'vmtest begin failed: every VM here is busy.' } }
+    # Busy for a free VM only; with an idle one allowed, it takes that.
+    $global:IdleBegin = { param($q) if ($q.FreeOnly) { @{ code = 1; busy = $true; out = 'vmtest begin failed: none free.' } } else { @{ code = 0; out = "The test VM 'V' is ready; Other / work had held it unused, so its state was saved first." } } }
+    function Use-World([hashtable]$World) {
+        $global:World = $World
+        $global:AtCalls = New-Object System.Collections.Generic.List[string]
+        Mock -ModuleName VmTest Invoke-VmTestAt {
+            $global:AtCalls.Add("$HostName $Command$(if ($Parameters.FreeOnly) { ' free' })")
+            $w = $global:World[$HostName]
+            if (-not $w) { return [pscustomobject]@{ Output = @("Couldn't reach ${HostName}: it's off."); ExitCode = 1; Busy = $false } }
+            switch ($Command) {
+                'where' { [pscustomobject]@{ Output = @($w.Where | ConvertTo-Json -Compress -Depth 4); ExitCode = 0; Busy = $false } }
+                'begin' { $a = & $w.Begin $Parameters; [pscustomobject]@{ Output = @($a.out); ExitCode = $a.code; Busy = [bool]$a.busy } }
+                default {
+                    $code = if ($w.Code) { $w.Code } else { 0 }
+                    $out = if ($w.Out) { $w.Out } else { "$Command ran on $HostName" }
+                    [pscustomobject]@{ Output = @($out); ExitCode = $code; Busy = $false }
+                }
+            }
+        }
+    }
+    function Invoke-Routed([string]$Command, [hashtable]$Parameters = @{}) {
+        $p = @{ Repo = 'Mine'; Branch = 'x' } + $Parameters
+        Invoke-VmTestRouted -Command $Command -Parameters $p -Hosts $both
+    }
+    function Reset-Placed { Get-ChildItem $env:VMTEST_STATE -Filter 'placed-*' -ErrorAction SilentlyContinue | Remove-Item -Force; Clear-VmTestLock -VMName $first }
+
+    Context 'which PCs' {
+        $before = $env:LOCALAPPDATA
+        $env:LOCALAPPDATA = Join-Path $TestDrive 'appdata-several'
+        $hosts = Join-Path $env:LOCALAPPDATA 'vmtest\hosts'
+        New-Item -ItemType Directory $hosts -Force | Out-Null
+        Mock -ModuleName VmTest Test-LocalTestVMs { $true }
+        Mock -ModuleName VmTest Get-CurrentNetworks { @('HomeNet') }
+        try {
+            It "is just this PC's own VMs, as before, with no other PC set up" {
+                @(Get-VmTestHosts).Count | Should Be 0
+            }
+            It 'adds a PC set up with vmtest host, while this PC is on a network it was set up on' {
+                Set-Content (Join-Path $hosts 'HOSTB.xml') 'sign-in'
+                Set-Content (Join-Path $hosts 'HOSTB.json') '{"networks":["HomeNet"]}'
+                @(Get-VmTestHosts) -join ',' | Should Be 'local,HOSTB'
+            }
+            It 'leaves it out on any other network, and when no network was recorded for it' {
+                Mock -ModuleName VmTest Get-CurrentNetworks { @('CoffeeShop') }
+                @(Get-VmTestHosts).Count | Should Be 0
+                Mock -ModuleName VmTest Get-CurrentNetworks { @('HomeNet') }
+                Remove-Item (Join-Path $hosts 'HOSTB.json')
+                @(Get-VmTestHosts).Count | Should Be 0
+                Set-Content (Join-Path $hosts 'HOSTB.json') '{"networks":["HomeNet"]}'
+            }
+            It "uses just that PC when this one has no test VMs" {
+                Mock -ModuleName VmTest Test-LocalTestVMs { $false }
+                @(Get-VmTestHosts) -join ',' | Should Be 'HOSTB'
+                Mock -ModuleName VmTest Test-LocalTestVMs { $true }
+            }
+            It 'VMTEST_HOSTS lists them instead, in order, with local and this PC''s name for this PC' {
+                $env:VMTEST_HOSTS = "HOSTC, $env:COMPUTERNAME;HOSTC"
+                try { @(Get-VmTestHosts) -join ',' | Should Be 'HOSTC,local' } finally { Remove-Item Env:\VMTEST_HOSTS }
+                $env:VMTEST_HOSTS = 'local'
+                try { @(Get-VmTestHosts).Count | Should Be 0 } finally { Remove-Item Env:\VMTEST_HOSTS }
+                $env:VMTEST_HOSTS = '..\x'
+                try { { Get-VmTestHosts } | Should Throw "isn't a usable computer name" } finally { Remove-Item Env:\VMTEST_HOSTS }
+            }
+            It 'VMTEST_HOST still means that one PC alone, and the PC a command went to never spreads it again' {
+                $env:VMTEST_HOST = 'HOSTB'
+                try { @(Get-VmTestHosts).Count | Should Be 0 } finally { Remove-Item Env:\VMTEST_HOST }
+                foreach ($v in 'VMTEST_ON_HOST', 'VMTEST_ROUTED') {
+                    Set-Item "Env:\$v" '1'
+                    try { @(Get-VmTestHosts).Count | Should Be 0 } finally { Remove-Item "Env:\$v" }
+                }
+            }
+        } finally { $env:LOCALAPPDATA = $before }
+    }
+
+    Context 'which networks' {
+        It 'counts only networks on real adapters or a Hyper-V external switch, not a VPN' {
+            Mock -ModuleName VmTest Get-NetAdapter { [pscustomobject]@{ InterfaceIndex = 21 } } -ParameterFilter { $PSBoundParameters.ContainsKey('Physical') }
+            Mock -ModuleName VmTest Get-NetAdapter { [pscustomobject]@{ InterfaceIndex = 25 } } -ParameterFilter { "$Name" -eq 'vEthernet (External)' }
+            Mock -ModuleName VmTest Get-VMSwitch { [pscustomobject]@{ Name = 'External' } }
+            Mock -ModuleName VmTest Get-NetConnectionProfile {
+                [pscustomobject]@{ Name = 'Tailscale'; InterfaceIndex = 47 }
+                [pscustomobject]@{ Name = 'HomeNet'; InterfaceIndex = 25 }
+                [pscustomobject]@{ Name = 'Desk'; InterfaceIndex = 21 }
+                [pscustomobject]@{ Name = 'Unidentified network'; InterfaceIndex = 31 }
+            }
+            @(InModuleScope VmTest { Get-CurrentNetworks }) -join ',' | Should Be 'Desk,HomeNet'
+        }
+    }
+
+    Context 'begin' {
+        It 'takes a free VM on another PC when every VM here is busy, and remembers where' {
+            Reset-Placed
+            Use-World @{ local = @{ Where = (New-Where -Free 0); Begin = $global:BusyBegin }; HOSTB = @{ Where = (New-Where); Begin = $global:ReadyBegin } }
+            $r = Invoke-Routed 'begin'
+            $r.ExitCode | Should Be 0
+            $r.Output[0] | Should Be "On HOSTB: The test VM 'V' is ready for Mine / x, started from Clean."
+            InModuleScope VmTest { Get-PlacedHost (Resolve-Task -Repo 'Mine' -Branch 'x') } | Should Be 'HOSTB'
+        }
+        It 'takes a free VM on another PC before saving and taking an idle one here' {
+            Reset-Placed
+            Use-World @{ local = @{ Where = (New-Where -Free 0); Begin = $global:IdleBegin }; HOSTB = @{ Where = (New-Where); Begin = $global:ReadyBegin } }
+            (Invoke-Routed 'begin').Output[0] | Should Match '^On HOSTB:'
+            @($global:AtCalls | Where-Object { $_ -like '* begin*' }) -join '|' | Should Be 'local begin free|HOSTB begin free'
+        }
+        It 'takes an idle VM only once no PC has a free one' {
+            Reset-Placed
+            Use-World @{ local = @{ Where = (New-Where -Free 0); Begin = $global:IdleBegin }; HOSTB = @{ Where = (New-Where -Free 0); Begin = $global:BusyBegin } }
+            $r = Invoke-Routed 'begin'
+            $r.Output[0] | Should Match "^On this PC \($env:COMPUTERNAME\): The test VM 'V' is ready; Other / work had held it unused"
+            @($global:AtCalls | Where-Object { $_ -like '* begin*' }) -join '|' | Should Be 'local begin free|HOSTB begin free|local begin'
+            InModuleScope VmTest { Get-PlacedHost (Resolve-Task -Repo 'Mine' -Branch 'x') } | Should Be 'local'
+        }
+        It "tries the PC with this task's checkpoint first" {
+            Reset-Placed
+            Use-World @{ local = @{ Where = (New-Where); Begin = $global:ReadyBegin }; HOSTB = @{ Where = (New-Where -CheckpointOn 'ClaudeTesting-2'); Begin = $global:ReadyBegin } }
+            (Invoke-Routed 'begin').Output[0] | Should Match '^On HOSTB:'
+        }
+        It 'carries on where this task already holds a VM, and nowhere else' {
+            Reset-Placed
+            Use-World @{ local = @{ Where = (New-Where); Begin = $global:ReadyBegin }; HOSTB = @{ Where = (New-Where -Holds 'ClaudeTesting'); Begin = $global:ReadyBegin } }
+            (Invoke-Routed 'begin').Output[0] | Should Match '^On HOSTB:'
+            @($global:AtCalls | Where-Object { $_ -like '* begin*' }) -join '|' | Should Be 'HOSTB begin'
+        }
+        It 'refuses a second VM for this session on any PC, as on one, and starts nothing' {
+            Reset-Placed
+            $o = [pscustomobject]@{ vm = 'ClaudeTesting-3'; repo = 'Other'; branch = 'work' }
+            Use-World @{ local = @{ Where = (New-Where); Begin = $global:ReadyBegin }; HOSTB = @{ Where = (New-Where -Session $o); Begin = $global:ReadyBegin } }
+            $r = Invoke-Routed 'begin'
+            $r.ExitCode | Should Be 1
+            $r.Output -join ' ' | Should Match "This session already holds 'ClaudeTesting-3' on HOSTB for Other / work, and this is Mine / x"
+            @($global:AtCalls | Where-Object { $_ -like '* begin*' }).Count | Should Be 0
+        }
+        It 'says what every PC said when none has a VM to give' {
+            Reset-Placed
+            Use-World @{ local = @{ Where = (New-Where -Free 0); Begin = $global:BusyBegin }; HOSTB = @{ Where = (New-Where -Free 0); Begin = $global:BusyBegin } }
+            $r = Invoke-Routed 'begin'
+            $r.ExitCode | Should Be 1
+            $r.Output -join '|' | Should Be "vmtest begin failed: no test VM is free on any PC.|On this PC ($env:COMPUTERNAME): every VM here is busy.|On HOSTB: every VM here is busy."
+        }
+        It "skips a PC that can't be reached, and says so" {
+            Reset-Placed
+            Use-World @{ local = @{ Where = (New-Where -Free 0); Begin = $global:BusyBegin } }
+            $r = Invoke-Routed 'begin'
+            $r.Output -join '|' | Should Match "On this PC \($env:COMPUTERNAME\): every VM here is busy\.\|Couldn't reach HOSTB: it's off\.$"
+            Use-World @{ local = @{ Where = (New-Where); Begin = $global:ReadyBegin } }
+            (Invoke-Routed 'begin').ExitCode | Should Be 0
+        }
+        It '-HostName keeps to that PC' {
+            Reset-Placed
+            Use-World @{ local = @{ Where = (New-Where); Begin = $global:ReadyBegin }; HOSTB = @{ Where = (New-Where); Begin = $global:ReadyBegin } }
+            (Invoke-Routed 'begin' @{ HostName = 'HOSTB' }).Output[0] | Should Match '^On HOSTB:'
+            @($global:AtCalls | Where-Object { $_ -like '* begin*' }) -join '|' | Should Be 'HOSTB begin'
+            { Invoke-Routed 'begin' @{ HostName = 'NOPE' } } | Should Throw "'NOPE' isn't one of the PCs vmtest uses"
+        }
+        It '-Wait goes round every PC until one frees up' {
+            Reset-Placed
+            $global:Rounds = 0
+            Mock -ModuleName VmTest Start-Sleep { $global:Rounds++; $global:World.HOSTB.Begin = $global:ReadyBegin }
+            Mock -ModuleName VmTest Write-Host {}
+            Use-World @{ local = @{ Where = (New-Where -Free 0); Begin = $global:BusyBegin }; HOSTB = @{ Where = (New-Where -Free 0); Begin = $global:BusyBegin } }
+            $r = Invoke-Routed 'begin' @{ Wait = $true; Timeout = 20 }
+            $r.ExitCode | Should Be 0
+            $r.Output[0] | Should Match '^On HOSTB:'
+            $global:Rounds | Should Be 1
+        }
+    }
+
+    Context 'the other commands' {
+        It "run here when this task holds a VM on this PC, without asking any other PC" {
+            Reset-Placed
+            Use-FakeHyperV
+            Use-World @{ local = @{ Where = (New-Where) }; HOSTB = @{ Where = (New-Where) } }
+            Set-VmTestLock -Task $mine -VMName $first -Force
+            (Invoke-Routed 'windows').Here | Should Be $true
+            $global:AtCalls.Count | Should Be 0
+        }
+        It 'go straight to the PC the task was placed on' {
+            Reset-Placed
+            InModuleScope VmTest { Set-PlacedHost -Task (Resolve-Task -Repo 'Mine' -Branch 'x') -HostName 'HOSTB' }
+            Use-World @{ local = @{ Where = (New-Where) }; HOSTB = @{ Where = (New-Where -Holds 'ClaudeTesting'); Out = 'Exit code 4'; Code = 4 } }
+            $r = Invoke-Routed 'run' @{ Target = 'exit 4' }
+            $r.Output -join '' | Should Be 'Exit code 4'
+            $r.ExitCode | Should Be 4
+            $global:AtCalls -join '|' | Should Be 'HOSTB run'
+        }
+        It 'ask every PC when there is no note of where, and remember the answer' {
+            Reset-Placed
+            Use-World @{ local = @{ Where = (New-Where) }; HOSTB = @{ Where = (New-Where -Holds 'ClaudeTesting') } }
+            (Invoke-Routed 'keys' @{ Target = '{TAB}' }).Output | Should Be 'keys ran on HOSTB'
+            InModuleScope VmTest { Get-PlacedHost (Resolve-Task -Repo 'Mine' -Branch 'x') } | Should Be 'HOSTB'
+        }
+        It 'look on the other PCs when the note of where is out of date' {
+            Reset-Placed
+            InModuleScope VmTest { Set-PlacedHost -Task (Resolve-Task -Repo 'Mine' -Branch 'x') -HostName 'HOSTB' }
+            Use-World @{ local = @{ Where = (New-Where) }; HOSTB = @{ Where = (New-Where); Out = "vmtest windows failed: Mine / x doesn't hold a test VM."; Code = 1 }
+                HOSTC = @{ Where = (New-Where -Holds 'ClaudeTesting') } }
+            $r = Invoke-VmTestRouted -Command 'windows' -Parameters @{ Repo = 'Mine'; Branch = 'x' } -Hosts @('local', 'HOSTB', 'HOSTC')
+            $r.Output | Should Be 'windows ran on HOSTC'
+        }
+        It 'say why there is no VM from this PC when no PC knows the task' {
+            Reset-Placed
+            Use-World @{ local = @{ Where = (New-Where) }; HOSTB = @{ Where = (New-Where) } }
+            (Invoke-Routed 'windows').Here | Should Be $true
+        }
+        It 'end puts back the VM and removes checkpoints on every PC that has them, then forgets where' {
+            Reset-Placed
+            InModuleScope VmTest { Set-PlacedHost -Task (Resolve-Task -Repo 'Mine' -Branch 'x') -HostName 'HOSTB' }
+            Use-World @{ local = @{ Where = (New-Where -CheckpointOn 'ClaudeTesting-2') }; HOSTB = @{ Where = (New-Where -Holds 'ClaudeTesting') } }
+            $r = Invoke-Routed 'end'
+            $r.ExitCode | Should Be 0
+            $r.Output -join '|' | Should Be "On this PC ($env:COMPUTERNAME): end ran on local|On HOSTB: end ran on HOSTB"
+            InModuleScope VmTest { Get-PlacedHost (Resolve-Task -Repo 'Mine' -Branch 'x') } | Should BeNullOrEmpty
+        }
+        It "end keeps the note of where when a PC can't be reached, and says to run it again" {
+            Reset-Placed
+            InModuleScope VmTest { Set-PlacedHost -Task (Resolve-Task -Repo 'Mine' -Branch 'x') -HostName 'HOSTB' }
+            Use-World @{ local = @{ Where = (New-Where -Holds $first) } }
+            $r = Invoke-Routed 'end'
+            $r.Output -join '|' | Should Match "Couldn't reach HOSTB: it's off\. Any checkpoint this task has there is still there"
+            InModuleScope VmTest { Get-PlacedHost (Resolve-Task -Repo 'Mine' -Branch 'x') } | Should Be 'HOSTB'
+        }
+        It 'status shows every PC, and still answers when one is away' {
+            Use-World @{ local = @{ Where = (New-Where); Out = 'Test VMs on this PC: 3' }; HOSTB = @{ Where = (New-Where); Out = 'Test VMs on HOSTB: 3' } }
+            $r = Invoke-VmTestRouted -Command 'status' -Parameters @{} -Hosts $both
+            $r.Output -join '|' | Should Be "Test VMs on 2 PCs: this PC ($env:COMPUTERNAME) and HOSTB.||Test VMs on this PC: 3||Test VMs on HOSTB: 3"
+            $r.ExitCode | Should Be 0
+            Use-World @{ local = @{ Where = (New-Where); Out = 'Test VMs on this PC: 3' } }
+            $r = Invoke-VmTestRouted -Command 'status' -Parameters @{} -Hosts $both
+            $r.Output[-1] | Should Be "Couldn't reach HOSTB: it's off."
+            $r.ExitCode | Should Be 0
+        }
+        It 'where says which PC and VM the task holds, and where its checkpoints are' {
+            Use-World @{ local = @{ Where = (New-Where -CheckpointOn 'ClaudeTesting-2' -Free 2) }; HOSTB = @{ Where = (New-Where -Holds 'ClaudeTesting' -CheckpointOn 'ClaudeTesting' -Free 2) } }
+            $out = (Invoke-Routed 'where').Output -join '|'
+            $out | Should Be ("Mine / x has a saved checkpoint on 'ClaudeTesting-2' on this PC ($env:COMPUTERNAME).|this PC ($env:COMPUTERNAME) has 2 of its 3 test VMs free.|" +
+                "Mine / x holds 'ClaudeTesting' on HOSTB.|HOSTB has 2 of its 3 test VMs free.")
+            Use-World @{ local = @{ Where = (New-Where) } }
+            (Invoke-Routed 'where').Output[0] | Should Be "Mine / x doesn't hold a test VM on any PC."
+        }
+        It 'prepare stays on this PC unless -HostName names another' {
+            Use-World @{ local = @{ Where = (New-Where) }; HOSTB = @{ Where = (New-Where) } }
+            (Invoke-VmTestRouted -Command 'prepare' -Parameters @{} -Hosts $both).Here | Should Be $true
+            (Invoke-VmTestRouted -Command 'prepare' -Parameters @{ HostName = 'HOSTB'; Pool = $true } -Hosts $both).Output | Should Be 'prepare ran on HOSTB'
+        }
+    }
+
+    Context 'on each PC' {
+        $env:VMTEST_POOL = '2'
+        try {
+            function Set-Idle([string]$VMName, $Task, [int]$MinutesAgo) {
+                Set-VmTestLock -Task $Task -VMName $VMName -Force
+                $p = Join-Path $env:VMTEST_STATE $(if ($VMName -eq $first) { 'lock.json' } else { "lock-$VMName.json" })
+                $l = Get-Content $p -Raw | ConvertFrom-Json
+                $l.since = (Get-Date).AddMinutes(-$MinutesAgo).ToString('s')
+                $l | ConvertTo-Json | Set-Content $p
+            }
+            function Use-IdleAndBusy {
+                foreach ($n in $first, $second) { Clear-VmTestLock -VMName $n }
+                Use-FakePool @{ $first = (New-FakeVM -State 'Running'); $second = (New-FakeVM -State 'Running') }
+                Set-Idle $first $other 300
+                Set-Idle $second (Resolve-Task -Repo 'Third' -Branch 'y') 5
+            }
+            It "with -FreeOnly, begin doesn't save and take an idle VM, and says it's busy" {
+                Use-IdleAndBusy
+                $err = $null
+                try { Invoke-VmTestBegin -Repo 'Mine' -Branch 'x' -FreeOnly } catch { $err = $_ }
+                $err.Exception.Data['vmtestBusy'] | Should Be $true
+                @(Get-AllCalls).Count | Should Be 0
+                Invoke-VmTestBegin -Repo 'Mine' -Branch 'x' | Should Match 'Other / work had held it unused'
+            }
+            It 'begin here, for a command spread across PCs, reports busy without throwing, and leaves VMTEST_ROUTED as it was' {
+                Use-IdleAndBusy
+                $r = InModuleScope VmTest { Invoke-VmTestLocally -Command 'begin' -Parameters @{ Repo = 'Mine'; Branch = 'x'; FreeOnly = $true } }
+                $r.ExitCode | Should Be 1
+                $r.Busy | Should Be $true
+                $r.Output[0] | Should Match '^vmtest begin failed: '
+                $env:VMTEST_ROUTED | Should BeNullOrEmpty
+            }
+            It 'where reports the VM this task holds, its checkpoints, and the free VMs' {
+                foreach ($n in $first, $second) { Clear-VmTestLock -VMName $n }
+                Use-FakePool @{ $first = (New-FakeVM -State 'Running'); $second = (New-FakeVM -Checkpoints 'Clean', $mine.Checkpoint) }
+                Set-VmTestLock -Task $mine -VMName $first -Force
+                $w = Get-VmTestWhere -Repo 'Mine' -Branch 'x'
+                $w.holds | Should Be $first
+                @($w.checkpointOn) -join ',' | Should Be $second
+                $w.free | Should Be 1
+                $w.vms | Should Be 2
+                (Format-Where -Where $w -Label 'this PC') -join '|' | Should Be "Mine / x holds '$first' on this PC.|Mine / x has a saved checkpoint on '$second' on this PC.|this PC has 1 of its 2 test VMs free."
+                (Get-VmTestWhere -Repo 'Other' -Branch 'work').holds | Should BeNullOrEmpty
+            }
+        } finally { $env:VMTEST_POOL = '1' }
+    }
+
+    Context 'vmtest.ps1' {
+        $stub = Join-Path $TestDrive 'stub-routed'
+        New-Item -ItemType Directory $stub -Force | Out-Null
+        Copy-Item (Join-Path $root 'vmtest.ps1') $stub
+        Set-Content (Join-Path $stub 'VmTest.psm1') @'
+function Get-VmTestHosts { if ($env:VMTEST_STUB_HOSTS) { @('local', 'HOSTB') } else { @() } }
+function Test-ForwardToHost { $false }
+function Invoke-VmTestRouted {
+    param($Command, $Parameters)
+    if ($env:VMTEST_STUB_HERE) { return [pscustomobject]@{ Here = $true } }
+    [pscustomobject]@{ Here = $false; Output = @("routed $Command [$($Parameters.HostName)]"); ExitCode = 3 }
+}
+function Get-VmTestStatus { 'status here' }
+function Invoke-VmTestBegin {
+    param($Repo, $Branch, $VM, [switch]$Force, [switch]$FreeOnly, $WaitSeconds)
+    $e = New-Object System.InvalidOperationException "every VM is busy (free only: $FreeOnly)"
+    $e.Data['vmtestBusy'] = $true
+    throw $e
+}
+'@
+        function Invoke-Client { $out = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $stub 'vmtest.ps1') @args 2>&1; [pscustomobject]@{ Out = ($out -join "`n"); Code = $LASTEXITCODE } }
+        It 'sends the command where the PCs say, with its output and exit code' {
+            $env:VMTEST_STUB_HOSTS = '1'
+            try { $r = Invoke-Client status -HostName HOSTB } finally { Remove-Item Env:\VMTEST_STUB_HOSTS }
+            $r.Out | Should Be 'routed status [HOSTB]'
+            $r.Code | Should Be 3
+        }
+        It 'runs it here when that is this PC' {
+            $env:VMTEST_STUB_HOSTS = '1'; $env:VMTEST_STUB_HERE = '1'
+            try { $r = Invoke-Client status } finally { Remove-Item Env:\VMTEST_STUB_HOSTS, Env:\VMTEST_STUB_HERE }
+            $r.Out | Should Be 'status here'
+            $r.Code | Should Be 0
+        }
+        It "says 'every VM is busy' with exit code 75 only to a command spread across PCs" {
+            $env:VMTEST_ROUTED = '1'
+            try { $r = Invoke-Client begin -Repo r -Branch b -FreeOnly } finally { Remove-Item Env:\VMTEST_ROUTED }
+            $r.Out | Should Be 'vmtest begin failed: every VM is busy (free only: True)'
+            $r.Code | Should Be 75
+            $r = Invoke-Client begin -Repo r -Branch b
+            $r.Out | Should Be 'vmtest begin failed: every VM is busy (free only: False)'
+            $r.Code | Should Be 1
+        }
+    }
+    Remove-Item Env:\VMTEST_STATE
+    Remove-Variable -Scope Global World, AtCalls, Rounds, ReadyBegin, BusyBegin, IdleBegin -ErrorAction SilentlyContinue
 }
 
 Remove-Item Env:\VMTEST_VM
