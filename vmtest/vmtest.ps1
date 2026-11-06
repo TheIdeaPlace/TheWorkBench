@@ -10,7 +10,8 @@ a VM uses the one this task holds.
 
   prepare [-Force] [-VM name]      one time: automatic sign-in, agent, Clean checkpoint
   prepare -Pool [-Force]           make the pool's other VMs from the first VM's Clean
-  status                           each VM: its state, who has it, checkpoints
+  status                           each VM on every PC vmtest uses: its state, who has it, checkpoints
+  where                            which PC and VM this task holds, and where its checkpoints are
   begin [-VM name] [-Wait] [-Force]
                                    take a free VM; carry on, restore this task's checkpoint, or start
                                    from Clean. -Wait waits up to -Timeout seconds when all are busy.
@@ -33,8 +34,9 @@ a VM uses the one this task holds.
   shot <out.png> [-FromHost]       picture of the VM's screen
   save                             checkpoint this task, park the VM, release it
   end [-Force -VM name]            after merge: delete this task's checkpoints, its VM back to Clean
-  host <computer>                  one time: use the test VMs on another PC; checks it, saves your
-                                   sign-in for it and copies vmtest there
+  host <computer>                  one time: use the test VMs on another PC as well as this PC's;
+                                   checks it, saves your sign-in for it and copies vmtest there
+  host <computer> -AddNetwork      use that PC on the network this one is on now, too
 
 -Window is a process id (its main window) or part of a window title (dialogs included).
 <control> is an AutomationId or a name; id:<id> matches only an AutomationId (id:-31984 for a
@@ -43,14 +45,17 @@ negative one) and name:<name> only a name.
 normal user's would; use it for per-machine installs and to drive windows of elevated programs.
 'vmtest run' exits with the command's own exit code.
 
-With VMTEST_HOST set to a computer's name, every command but 'host' runs on that PC's test VMs over
-PowerShell remoting. Files named here are copied there, and pictures are copied back.
+vmtest uses this PC's test VMs and those of every PC set up with 'vmtest host' while this PC is on
+a network that PC was set up on. 'begin' takes a free VM on any of them, and the other commands go
+to the PC whose VM the task holds, over PowerShell remoting: files named here are copied there, and
+pictures are copied back. -HostName <computer> (or 'local') picks the PC. VMTEST_HOSTS lists the PCs
+instead (for example local,HOSTNAME), and VMTEST_HOST set to a computer's name means only its VMs.
 #>
 [CmdletBinding()]
 param(
     [Parameter(Position = 0, Mandatory)]
     [ValidateSet('prepare', 'status', 'begin', 'deploy', 'launch', 'windows', 'tree', 'focused', 'invoke',
-        'setvalue', 'focus', 'keys', 'type', 'run', 'push', 'close', 'shot', 'save', 'end', 'host')]
+        'setvalue', 'focus', 'keys', 'type', 'run', 'push', 'close', 'shot', 'save', 'end', 'host', 'where')]
     [string]$Command,
     [Parameter(Position = 1)][string]$Target,
     [Parameter(Position = 2)][string]$Value,
@@ -68,7 +73,12 @@ param(
     [switch]$Wait,
     [switch]$Elevated,
     [switch]$FromHost,
-    [switch]$Force
+    [switch]$Force,
+    [string]$HostName,
+    [switch]$AddNetwork,
+    [switch]$Json,
+    # Internal: from a 'begin' across several PCs, take only a free VM here.
+    [switch]$FreeOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -92,6 +102,35 @@ function Ask([hashtable]$request) {
     Show-Answer (Invoke-GuestAgent $request -Elevated:$Elevated)
 }
 
+# A failure, as the user (or the PC that sent the command) should see it. From a command spread
+# across PCs, it goes in the output, for the PC that asked to show; there 'every VM is busy' exits 75.
+function Show-Failure($err) {
+    $message = "vmtest $Command failed: $($err.Exception.Message)"
+    if ($env:VMTEST_ROUTED) {
+        $message
+        if ($err.Exception.Data['vmtestSameTask']) { exit 76 }
+        if ($err.Exception.Data['vmtestBusy']) { exit 75 }
+    } else { Write-Host $message -ForegroundColor Red }
+    exit 1
+}
+
+# With several PCs' test VMs to use, the command goes to the right one (begin: any with a free VM).
+# It runs here, as below, when that's this PC.
+if ($Command -ne 'host') {
+    try {
+        $hosts = @(Get-VmTestHosts)
+        if ($hosts.Count) {
+            $routed = Invoke-VmTestRouted -Command $Command -Parameters $PSBoundParameters -Hosts $hosts
+            if (-not $routed.Here) {
+                $routed.Output
+                exit $routed.ExitCode
+            }
+        } else {
+            Assert-HostNameHere $HostName
+        }
+    } catch { Show-Failure $_ }
+}
+
 # With VMTEST_HOST set, the test VMs are on another PC: the command runs there, with the same
 # parameters, and comes back with the same output and exit code.
 if ($Command -ne 'host' -and (Test-ForwardToHost)) {
@@ -110,7 +149,17 @@ try {
     switch ($Command) {
         'prepare' { Invoke-VmTestPrepare -Repo $Repo -Branch $Branch -VM $VM -Pool:$Pool -Force:$Force }
         'status' { Get-VmTestStatus }
-        'begin' { Invoke-VmTestBegin -Repo $Repo -Branch $Branch -VM $VM -Force:$Force -WaitSeconds $(if ($Wait) { $Timeout } else { 0 }) }
+        'where' {
+            $w = Get-VmTestWhere -Repo $Repo -Branch $Branch
+            if ($Json) { $w | ConvertTo-Json -Compress -Depth 4 }
+            elseif ($w.taskError) { throw $w.taskError }
+            else {
+                $label = if ($env:VMTEST_ON_HOST) { $env:COMPUTERNAME } else { 'this PC' }
+                if (-not $w.holds) { "$($w.repo) / $($w.branch) doesn't hold a test VM on $label." }
+                Format-Where -Where $w -Label $label
+            }
+        }
+        'begin' { Invoke-VmTestBegin -Repo $Repo -Branch $Branch -VM $VM -Force:$Force -FreeOnly:$FreeOnly -WaitSeconds $(if ($Wait) { $Timeout } else { 0 }) }
         'deploy' { Need 'a folder or file to copy'; Assert-TaskHasVM -Repo $Repo -Branch $Branch; Invoke-VmTestDeploy -Path $Target -Name $Name }
         'push' {
             Need 'a file to copy'
@@ -145,6 +194,7 @@ try {
         'end' { Invoke-VmTestEnd -Repo $Repo -Branch $Branch -VM $VM -Force:$Force }
         'host' {
             Need "the name of the PC that has the test VMs, such as 'vmtest host HOSTNAME'"
+            if ($AddNetwork) { Add-VmTestHostNetwork -ComputerName $Target; break }
             # Typed at the console, so it works the same with a screen reader as anything else here.
             try {
                 $user = Read-Host "Your account on $Target (for example $Target\you, or MicrosoftAccount\you@example.com)"
@@ -154,8 +204,5 @@ try {
             Install-VmTestHost -ComputerName $Target -Credential (New-Object System.Management.Automation.PSCredential($user, $password))
         }
     }
-} catch {
-    Write-Host "vmtest $Command failed: $($_.Exception.Message)" -ForegroundColor Red
-    exit 1
-}
+} catch { Show-Failure $_ }
 exit $exitCode
