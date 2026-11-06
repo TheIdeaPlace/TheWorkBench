@@ -522,6 +522,13 @@ function Use-VmTestMutex {
     while (-not $stream) {
         try { $stream = [System.IO.File]::Open($path, 'OpenOrCreate', 'ReadWrite', 'None') }
         catch {
+            # Only another vmtest holding it is worth waiting for (sharing or lock violation); a bad
+            # folder or no access is an error now, not a busy PC.
+            $ex = $_.Exception
+            while ($ex.InnerException) { $ex = $ex.InnerException }
+            if (-not ($ex -is [System.IO.IOException]) -or ($ex.HResult -band 0xFFFF) -notin 32, 33) {
+                throw "vmtest can't use its lock file $($path): $($ex.Message)"
+            }
             if ((Get-Date) -ge $deadline) { throw (New-BusyError $BusyMessage) }
             Start-Sleep -Milliseconds 250
         }
@@ -1786,14 +1793,25 @@ function Get-CurrentNetworks {
             $real += @(Get-NetAdapter -Name "vEthernet ($($sw.Name))" -ErrorAction SilentlyContinue | ForEach-Object { [int]$_.InterfaceIndex })
         }
     }
-    @(foreach ($profile in @(Get-NetConnectionProfile -ErrorAction SilentlyContinue | Where-Object { $_.Name -and $real -contains [int]$_.InterfaceIndex })) {
-            $i = [int]$profile.InterfaceIndex
-            $gateways = @(Get-NetRoute -DestinationPrefix '0.0.0.0/0' -InterfaceIndex $i -ErrorAction SilentlyContinue | ForEach-Object { $_.NextHop })
-            $mac = @($(foreach ($g in $gateways) { Get-NetNeighbor -IPAddress $g -InterfaceIndex $i -ErrorAction SilentlyContinue | ForEach-Object { "$($_.LinkLayerAddress)" } }) |
-                    Where-Object { $_ -and $_ -notmatch '^(00-)+00$' })[0]
+    @(foreach ($net in @(Get-NetConnectionProfile -ErrorAction SilentlyContinue | Where-Object { $_.Name -and $real -contains [int]$_.InterfaceIndex })) {
+            $i = [int]$net.InterfaceIndex
+            # Sorted, so a network with two routers is always known by the same one.
+            $gateways = @(Get-NetRoute -DestinationPrefix '0.0.0.0/0' -InterfaceIndex $i -ErrorAction SilentlyContinue | ForEach-Object { "$($_.NextHop)" } | Sort-Object -Unique)
+            $mac = Get-RouterAddress -Gateways $gateways -InterfaceIndex $i
+            if (-not $mac -and $gateways) {
+                # Just after waking, the router's address may not be known yet; one ping finds it.
+                Test-Connection -ComputerName $gateways[0] -Count 1 -Quiet -ErrorAction SilentlyContinue | Out-Null
+                $mac = Get-RouterAddress -Gateways $gateways -InterfaceIndex $i
+            }
             # Without the router's address, it can't be told apart from a copy, so it doesn't count.
-            if ($mac) { "$($profile.Name)|$($mac.ToUpperInvariant())" }
+            if ($mac) { "$($net.Name)|$($mac.ToUpperInvariant())" }
         }) | Sort-Object -Unique
+}
+
+function Get-RouterAddress {
+    param([string[]]$Gateways, [int]$InterfaceIndex)
+    @($(foreach ($g in $Gateways) { Get-NetNeighbor -IPAddress $g -InterfaceIndex $InterfaceIndex -ErrorAction SilentlyContinue | ForEach-Object { "$($_.LinkLayerAddress)" } }) |
+            Where-Object { $_ -and $_ -notmatch '^(00-)+00$' })[0]
 }
 
 # A network as people say it: its name.
@@ -1958,7 +1976,9 @@ function Invoke-VmTestAt {
         # 75: every VM is busy; 76: another open session has this same task's VM there.
         [pscustomobject]@{ Output = @($r.Output); ExitCode = [int]$r.ExitCode; Busy = ([int]$r.ExitCode -in 75, 76); SameTask = ([int]$r.ExitCode -eq 76) }
     } catch {
-        [pscustomobject]@{ Output = @("Couldn't reach ${HostName}: $($_.Exception.Message)"); ExitCode = 1; Busy = $false; Unreachable = $true }
+        # Never connected (nothing ran there), as opposed to a connection lost partway through.
+        $never = $_.Exception.Message -like "Couldn't connect to *" -or $_.Exception.Message -like "Couldn't find *"
+        [pscustomobject]@{ Output = @("Couldn't reach ${HostName}: $($_.Exception.Message)"); ExitCode = 1; Busy = $false; Unreachable = $never }
     }
 }
 
@@ -2023,12 +2043,14 @@ function Invoke-VmTestRouted {
     # Setting up a PC's VMs: this PC's, or the one -HostName names.
     if ($Command -eq 'prepare') {
         if (-not $chosen -and $Hosts -notcontains 'local') {
-            if ($Hosts.Count -ne 1) { throw "This PC has no test VMs of its own, so say which PC to prepare: -HostName $($Hosts -join ' or -HostName ')." }
+            if ($Hosts.Count -ne 1 -or (Test-LocalTestVMs)) {
+                throw "Say which PC to prepare: -HostName $(@(@($Hosts) + @(if (Test-LocalTestVMs) { 'local' })) -join ' or -HostName ')."
+            }
             $chosen = $Hosts[0]
         }
         if (-not $chosen -or $chosen -eq 'local') { return $here }
         $r = Invoke-VmTestAt -HostName $chosen -Command 'prepare' -Parameters $p
-        return & $done $r.Output $r.ExitCode
+        return & $done @(Add-HostLabel -HostName $chosen -Lines $r.Output) $r.ExitCode
     }
 
     $task = Resolve-Task -Repo $p.Repo -Branch $p.Branch
@@ -2162,9 +2184,9 @@ function Start-RoutedBegin {
             Set-PlacedHost -Task $Task -HostName $t.Host
             $out = @(Add-HostLabel -HostName $t.Host -Lines $r.Output)
             # A checkpoint can't move between PCs, so say where this task's saved state stayed.
-            $left = @($withMine | Where-Object { $_.Host -ne $t.Host })
+            $left = @($withMine | Where-Object { $_.Host -ne $t.Host -and @($tries | ForEach-Object { $_.Host }) -contains $_.Host })
             if ($left -and -not @($withMine | Where-Object { $_.Host -eq $t.Host })) {
-                $out += "This task's saved checkpoint is on $(Format-HostLabel $left[0].Host), where no VM was free, so this started from Clean. " +
+                $out += "This task's saved checkpoint is on $(Format-HostLabel $left[0].Host), which couldn't give it a VM just now, so this started from Clean. " +
                     "Saving here makes a new checkpoint on $(Format-HostLabel $t.Host); the one on $(Format-HostLabel $left[0].Host) stays until 'vmtest end'."
             }
             return [pscustomobject]@{ Busy = $false; ExitCode = 0; Output = $out }
@@ -2175,6 +2197,8 @@ function Start-RoutedBegin {
         # Another open session has this same task's VM there: a VM on another PC would make two
         # VMs for one task. Wait for that one instead.
         if ($r.SameTask) { $stop = $true; break }
+        # A PC that couldn't be reached at all took nothing: go on to the next.
+        if ($r.Unreachable) { continue }
         if (-not $r.Busy) {
             # A begin that failed partway may have taken the VM there; never take this task a second.
             $after = @(Get-WhereEverywhere -Hosts @($t.Host) -Task $Task)[0]
@@ -2216,6 +2240,9 @@ function Invoke-RoutedEnd {
         $r = Invoke-VmTestAt -HostName $h -Command 'end' -Parameters $q
         $out += @(Add-HostLabel -HostName $h -Lines $r.Output)
         if ($r.ExitCode -ne 0) { $code = $r.ExitCode }
+    }
+    if ($Parameters.Force -and -not $forceHost) {
+        $out += "-Force wasn't used: this task holds no VM, so it didn't say which PC's VM to reset. Name it with -HostName (and -VM)."
     }
     $missed = @($all | Where-Object { -not $_.Where })
     $out += @($missed | ForEach-Object { "$($_.Note) Any checkpoint this task has there is still there; run 'vmtest end' again once it can be reached." })

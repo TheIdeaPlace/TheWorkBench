@@ -1493,7 +1493,7 @@ Describe 'several PCs (VMTEST_HOSTS)' {
         Mock -ModuleName VmTest Invoke-VmTestAt {
             $global:AtCalls.Add("$HostName $Command$(if ($Parameters.FreeOnly) { ' free' })")
             $w = $global:World[$HostName]
-            if (-not $w) { return [pscustomobject]@{ Output = @("Couldn't reach ${HostName}: it's off."); ExitCode = 1; Busy = $false } }
+            if (-not $w -or ($Command -eq 'begin' -and $w.Begin -eq 'off')) { return [pscustomobject]@{ Output = @("Couldn't reach ${HostName}: it's off."); ExitCode = 1; Busy = $false; Unreachable = $true } }
             switch ($Command) {
                 'where' { [pscustomobject]@{ Output = @($w.Where | ConvertTo-Json -Compress -Depth 4); ExitCode = 0; Busy = $false } }
                 'begin' { $a = & $w.Begin $Parameters; [pscustomobject]@{ Output = @($a.out); ExitCode = $a.code; Busy = [bool]$a.busy; SameTask = [bool]$a.sameTask } }
@@ -1707,7 +1707,15 @@ Describe 'several PCs (VMTEST_HOSTS)' {
             Use-World @{ local = @{ Where = (New-Where -CheckpointOn 'ClaudeTesting' -Free 0); Begin = $global:BusyBegin }; HOSTB = @{ Where = (New-Where); Begin = $global:ReadyBegin } }
             $out = (Invoke-Routed 'begin').Output -join ' '
             $out | Should Match "^On HOSTB: "
-            $out | Should Match "This task's saved checkpoint is on this PC \($env:COMPUTERNAME\), where no VM was free, so this started from Clean"
+            $out | Should Match "This task's saved checkpoint is on this PC \($env:COMPUTERNAME\), which couldn't give it a VM just now, so this started from Clean"
+        }
+        It 'goes on to the next PC when one answered but then could not be reached for begin' {
+            Reset-Placed
+            Use-World @{ local = @{ Where = (New-Where); Begin = $global:ReadyBegin }; HOSTB = @{ Where = (New-Where -CheckpointOn 'ClaudeTesting'); Begin = 'off' } }
+            $r = Invoke-Routed 'begin'
+            $r.ExitCode | Should Be 0
+            $r.Output[0] | Should Match '^On this PC'
+            ($r.Output -join ' ') | Should Match "This task's saved checkpoint is on HOSTB, which couldn't give it a VM just now"
         }
         It '-Force is never used to take a VM while another PC may have a free one' {
             Reset-Placed
@@ -1786,6 +1794,12 @@ Describe 'several PCs (VMTEST_HOSTS)' {
             (Invoke-Routed 'end' @{ Force = $true }).ExitCode | Should Be 0
             $global:EndParams.HOSTB.Force | Should Be $true
             $global:EndParams.local.ContainsKey('Force') | Should Be $false
+            Use-World @{ local = @{ Where = (New-Where -CheckpointOn 'ClaudeTesting') }; HOSTB = @{ Where = (New-Where) } }
+            Mock -ModuleName VmTest Invoke-VmTestAt {
+                if ($Command -eq 'end') { return [pscustomobject]@{ Output = @('ended'); ExitCode = 0; Busy = $false } }
+                [pscustomobject]@{ Output = @($global:World[$HostName].Where | ConvertTo-Json -Compress -Depth 4); ExitCode = 0; Busy = $false }
+            }
+            (Invoke-Routed 'end' @{ Force = $true }).Output -join ' ' | Should Match "-Force wasn't used: this task holds no VM"
         }
         It "end keeps the note of where when a PC can't be reached, and says to run it again" {
             Reset-Placed
@@ -1815,13 +1829,16 @@ Describe 'several PCs (VMTEST_HOSTS)' {
         }
         It 'prepare goes to the one other PC when this PC has no test VMs, and asks which when there are several' {
             Use-World @{ HOSTB = @{ Where = (New-Where) }; HOSTC = @{ Where = (New-Where) } }
-            (Invoke-VmTestRouted -Command 'prepare' -Parameters @{} -Hosts @('HOSTB')).Output | Should Be 'prepare ran on HOSTB'
-            { Invoke-VmTestRouted -Command 'prepare' -Parameters @{} -Hosts @('HOSTB', 'HOSTC') } | Should Throw 'say which PC to prepare: -HostName HOSTB or -HostName HOSTC'
+            Mock -ModuleName VmTest Test-LocalTestVMs { $false }
+            (Invoke-VmTestRouted -Command 'prepare' -Parameters @{} -Hosts @('HOSTB')).Output | Should Be 'On HOSTB: prepare ran on HOSTB'
+            { Invoke-VmTestRouted -Command 'prepare' -Parameters @{} -Hosts @('HOSTB', 'HOSTC') } | Should Throw 'Say which PC to prepare: -HostName HOSTB or -HostName HOSTC.'
+            Mock -ModuleName VmTest Test-LocalTestVMs { $true }
+            { Invoke-VmTestRouted -Command 'prepare' -Parameters @{} -Hosts @('HOSTB') } | Should Throw 'Say which PC to prepare: -HostName HOSTB or -HostName local.'
         }
         It 'prepare stays on this PC unless -HostName names another' {
             Use-World @{ local = @{ Where = (New-Where) }; HOSTB = @{ Where = (New-Where) } }
             (Invoke-VmTestRouted -Command 'prepare' -Parameters @{} -Hosts $both).Here | Should Be $true
-            (Invoke-VmTestRouted -Command 'prepare' -Parameters @{ HostName = 'HOSTB'; Pool = $true } -Hosts $both).Output | Should Be 'prepare ran on HOSTB'
+            (Invoke-VmTestRouted -Command 'prepare' -Parameters @{ HostName = 'HOSTB'; Pool = $true } -Hosts $both).Output | Should Be 'On HOSTB: prepare ran on HOSTB'
         }
     }
 
@@ -1884,6 +1901,14 @@ Describe 'several PCs (VMTEST_HOSTS)' {
                 # Let go afterwards, even after a failure inside.
                 try { InModuleScope VmTest { Use-VmTestMutex -MutexName 'Local\vmtest-test' { throw 'inside' } } } catch { }
                 InModuleScope VmTest { Use-VmTestMutex -MutexName 'Local\vmtest-test' -WaitMinutes 0 { 'free again' } } | Should Be 'free again'
+                # A folder it can't use is an error at once, not ten minutes of 'busy'.
+                $before = $env:VMTEST_STATE
+                $env:VMTEST_STATE = Join-Path $TestDrive 'a-file'
+                Set-Content $env:VMTEST_STATE 'not a folder'
+                $err = $null
+                try { InModuleScope VmTest { Use-VmTestMutex -MutexName 'Local\vmtest-test' -WaitMinutes 1 { 'ran' } } } catch { $err = $_ }
+                $env:VMTEST_STATE = $before
+                $err.Exception.Data['vmtestBusy'] | Should BeNullOrEmpty
             }
             It 'begin here, for a command spread across PCs, reports busy without throwing, and leaves VMTEST_ROUTED as it was' {
                 Use-IdleAndBusy
