@@ -108,6 +108,7 @@ function Show-Failure($err) {
     $message = "vmtest $Command failed: $($err.Exception.Message)"
     if ($env:VMTEST_ROUTED) {
         $message
+        if ($err.Exception.Data['vmtestSameTask']) { exit 76 }
         if ($err.Exception.Data['vmtestBusy']) { exit 75 }
     } else { Write-Host $message -ForegroundColor Red }
     exit 1
@@ -117,12 +118,15 @@ function Show-Failure($err) {
 # It runs here, as below, when that's this PC.
 if ($Command -ne 'host') {
     try {
-        if (@(Get-VmTestHosts).Count) {
-            $routed = Invoke-VmTestRouted -Command $Command -Parameters $PSBoundParameters
+        $hosts = @(Get-VmTestHosts)
+        if ($hosts.Count) {
+            $routed = Invoke-VmTestRouted -Command $Command -Parameters $PSBoundParameters -Hosts $hosts
             if (-not $routed.Here) {
                 $routed.Output
                 exit $routed.ExitCode
             }
+        } else {
+            Assert-HostNameHere $HostName
         }
     } catch { Show-Failure $_ }
 }

@@ -190,13 +190,18 @@ changes for you or for Claude. Two PCs with three VMs each make a pool of six.
 It's off until you run `vmtest host` (below). After that, whenever this PC is on a network the host
 was set up on, vmtest uses both PCs' VMs:
 
-- `begin` takes a free VM on any of them. It tries the PC with this task's checkpoint first, then
-  the others, and only once no PC has a free VM does it save and take an idle one.
+- `begin` takes a free VM on any of them. It tries the PC with this task's checkpoint first (where
+  it also takes the idle VM holding that checkpoint, as on one PC), then the others. Only once no PC
+  has a free VM does it save and take another idle one, or use `-Force`. If it starts from Clean on
+  one PC while the task's checkpoint is on another, it says so: a checkpoint can't move between PCs.
+- It never gives a task VMs on two PCs: when another open session has this task's VM, or a `begin`
+  failed partway and left the VM held, it stops there.
 - Every other command goes to the PC whose VM the task holds.
 - `status` lists every PC's VMs, and `where` says which PC and VM this task holds, and where its
   checkpoints are.
-- `-HostName <computer>` (or `-HostName local`) keeps a command to one PC. `prepare` stays on this
-  PC unless it's given.
+- `-HostName <computer>` (or `-HostName local`) keeps a command to one PC. A `-HostName` vmtest isn't
+  using at the moment (another network, say) is refused, never ignored. `prepare` stays on this PC
+  unless it's given, or goes to the host when this PC has no test VMs of its own.
 
 ### On the host
 
@@ -242,7 +247,9 @@ was set up on, vmtest uses both PCs' VMs:
 
 Which networks count: those on this PC's own network adapters, or on a Hyper-V external switch,
 which shares one. A VPN such as Tailscale, and Hyper-V's internal Default Switch, are connected
-wherever the PC is, so they don't count.
+wherever the PC is, so they don't count. A network is known by its name and its router's hardware
+address together, so a Wi-Fi network elsewhere with the same name doesn't match. If you replace
+the router, run `-AddNetwork` again.
 
 ### What happens to each command
 
@@ -287,8 +294,10 @@ wherever the PC is, so they don't count.
   them on the same version.
 - Outside a domain, the sign-in goes (by NTLM) to whatever PC answers to the host's name. On
   another network, something else could answer to it. That's why a host is only used on the
-  networks it was set up on. `VMTEST_HOSTS` and `VMTEST_HOST` don't check the network, so turn them
-  off away from home.
+  networks it was set up on, matched by name and router. `VMTEST_HOSTS` and `VMTEST_HOST` don't check
+  the network, so turn them off away from home. With both set, `VMTEST_HOSTS` decides.
+- Each PC lets one vmtest command at a time change its VMs, whether it came from that PC or another,
+  by holding a file (`vmtest-lock.gate`) next to the locks.
 - One VM per session holds across PCs: `begin` won't give a session a VM on one PC while it holds
   one for another task on another.
 - `vmtest prepare -Pool` takes a few minutes per VM. It runs on the host; keep this PC awake until

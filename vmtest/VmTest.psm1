@@ -373,9 +373,12 @@ function Assert-NotOtherSession {
     param([Parameter(Mandatory)]$Lock, [Parameter(Mandatory)]$Task)
     if ((Test-SameHolder $Lock) -or -not (Test-HolderOpen $Lock)) { return }
     $last = Format-Duration ((Get-Date) - (Get-LastActivity $Lock))
-    throw (New-BusyError ("'$($Lock.vm)' is held for $($Task.Repo) / $($Task.Branch) by another Claude session that is still open " +
+    $e = New-BusyError ("'$($Lock.vm)' is held for $($Task.Repo) / $($Task.Branch) by another Claude session that is still open " +
             "(session $($Lock.session)$(Get-HolderPlace $Lock), last used $last ago). Sessions on the same repo and branch are the same task, so they'd share one VM " +
-            "and undo each other's work. Work on another branch or worktree, wait with 'vmtest begin -Wait', or ask the user."))
+            "and undo each other's work. Work on another branch or worktree, wait with 'vmtest begin -Wait', or ask the user.")
+    # A 'begin' across PCs must not take this task a second VM on another PC.
+    $e.Data['vmtestSameTask'] = $true
+    throw $e
 }
 
 # ---- notes left for a task whose VM was taken --------------------------------------------------
@@ -500,17 +503,31 @@ function Get-NoVMMessage {
 }
 
 # Commands that change a VM or a lock run one at a time across every vmtest on this PC, so two
-# sessions can't both see a VM as free and both take it.
+# sessions can't both see a VM as free and both take it. It's a file held open with no sharing,
+# next to the locks, rather than a named mutex: a 'Local\' mutex belongs to one Windows session, and
+# commands from other PCs run in a different one from the user's own, so they'd never wait for each
+# other. Windows lets the file go when the process ends, however it ends.
+$script:HeldGates = @{}
 function Use-VmTestMutex {
     param([Parameter(Mandatory)][scriptblock]$Script, [string]$MutexName = 'Local\vmtest-lock', [int]$WaitMinutes = 10,
         [string]$BusyMessage = "Another vmtest command has been changing the test VMs for $WaitMinutes minutes. Try again later.")
-    $mutex = New-Object System.Threading.Mutex($false, $MutexName)
-    try {
-        try { $got = $mutex.WaitOne([TimeSpan]::FromMinutes($WaitMinutes)) }
-        catch [System.Threading.AbandonedMutexException] { $got = $true }  # a vmtest that crashed held it
-        if (-not $got) { throw (New-BusyError $BusyMessage) }
-        try { & $Script } finally { $mutex.ReleaseMutex() }
-    } finally { $mutex.Dispose() }
+    $gate = ($MutexName -replace '^.*\\', '') -replace '[^A-Za-z0-9._-]', '_'
+    # Already held by this command further up: go ahead, as a mutex would.
+    if ($script:HeldGates[$gate]) { return & $Script }
+    $dir = (Get-VmTestConfig).StateDir
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    $path = Join-Path $dir "$gate.gate"
+    $deadline = (Get-Date).AddMinutes($WaitMinutes)
+    $stream = $null
+    while (-not $stream) {
+        try { $stream = [System.IO.File]::Open($path, 'OpenOrCreate', 'ReadWrite', 'None') }
+        catch {
+            if ((Get-Date) -ge $deadline) { throw (New-BusyError $BusyMessage) }
+            Start-Sleep -Milliseconds 250
+        }
+    }
+    $script:HeldGates[$gate] = $true
+    try { & $Script } finally { $script:HeldGates.Remove($gate); $stream.Dispose() }
 }
 
 # For commands that work inside the VM: this task must hold one, and it must be running.
@@ -1059,9 +1076,10 @@ function Select-VMForTask {
     # Clean. 4. The VM that has been idle longest. 5. With -Force, the longest-idle VM even so.
     $pick = @($roomy | Where-Object { $hasMine[$_.Name] })[0]
     if ($pick) { return @{ VM = $pick } }
-    # -FreeOnly (from a 'begin' across several PCs) takes only a free VM, so a free one on another PC
-    # comes before saving and taking an idle one here.
-    $pick = @($stale | Where-Object { $hasMine[$_.Name] -and -not $FreeOnly })[0]
+    # -FreeOnly (from a 'begin' across several PCs) takes a free VM, or the idle one with this task's
+    # checkpoint, which has its state: a free VM on another PC comes before saving and taking any
+    # other idle VM here, or taking one with -Force.
+    $pick = @($stale | Where-Object { $hasMine[$_.Name] })[0]
     if ($pick) { return @{ VM = $pick; Stale = $Locks[$pick.Name] } }
     $pick = $roomy[0]
     if ($pick) {
@@ -1069,7 +1087,7 @@ function Select-VMForTask {
         return @{ VM = $pick; Elsewhere = $elsewhere }
     }
     if ($stale -and -not $FreeOnly) { return @{ VM = $stale[0]; Stale = $Locks[$stale[0].Name] } }
-    if ($Force -and $held) { return @{ VM = $held[0]; Forced = $Locks[$held[0].Name] } }
+    if ($Force -and $held -and -not $FreeOnly) { return @{ VM = $held[0]; Forced = $Locks[$held[0].Name] } }
 
     # Nothing to give: say why, and when that changes.
     $lines = @()
@@ -1406,9 +1424,21 @@ function Get-VmTestStatus {
 # there, so it never forwards again.
 
 # Whether this command goes to another PC. Unset, everything runs here exactly as before.
-function Test-ForwardToHost { [bool]($env:VMTEST_HOST -and -not $env:VMTEST_ON_HOST) }
+# VMTEST_HOSTS, when it's set too, decides instead (see Get-VmTestHosts).
+function Test-ForwardToHost { [bool]($env:VMTEST_HOST -and -not $env:VMTEST_HOSTS -and -not $env:VMTEST_ON_HOST -and -not $env:VMTEST_ROUTED) }
 
 # The host's name, kept plain because it becomes a file name.
+# -HostName on a command that isn't spread across PCs: it must mean the PC the command runs on,
+# never be dropped, or the command would act on another PC's VMs than the one named.
+function Assert-HostNameHere([string]$HostName) {
+    if (-not $HostName) { return }
+    if ((Test-LocalName $HostName) -and -not (Test-ForwardToHost)) { return }
+    if ((Test-ForwardToHost) -and $HostName -eq $env:VMTEST_HOST) { return }
+    $using = if (Test-ForwardToHost) { $env:VMTEST_HOST } else { "this PC ($env:COMPUTERNAME)" }
+    throw ("vmtest is only using $using's test VMs right now, so it won't run this on '$HostName'. To add a PC set up with 'vmtest host', " +
+        "run 'vmtest host $HostName -AddNetwork' on its network, or list the PCs in VMTEST_HOSTS.")
+}
+
 function Assert-HostName([string]$ComputerName) {
     if ($ComputerName -notmatch '^[A-Za-z0-9][A-Za-z0-9.-]*$') {
         throw "'$ComputerName' isn't a usable computer name. Use the host's name, such as HOSTNAME, with letters, digits, . and - only."
@@ -1433,7 +1463,7 @@ function Get-HostSetupCommand([string]$ComputerName) {
 function Get-HostCredential([string]$ComputerName) {
     $path = Get-HostCredentialPath $ComputerName
     if (-not (Test-Path $path)) {
-        throw ("vmtest is set to use $ComputerName's test VMs, but there's no saved sign-in for it. To use this PC's own test VMs instead, clear VMTEST_HOST (or take $ComputerName out of VMTEST_HOSTS). " +
+        throw ("There's no saved sign-in for $ComputerName. If VMTEST_HOST or VMTEST_HOSTS names it, clear that or take it out to use other PCs' test VMs instead. " +
             "To save a sign-in, run this once in your own PowerShell window: $(Get-HostSetupCommand $ComputerName)")
     }
     try { Import-Clixml $path }
@@ -1463,21 +1493,23 @@ function Copy-FromHost {
     Copy-Item $Path -Destination $Destination -FromSession $Session -Force
 }
 
+function Test-HostResolves([string]$ComputerName) {
+    try { [bool]@([System.Net.Dns]::GetHostAddresses($ComputerName)).Count } catch { $false }
+}
+
 function New-HostSession {
     param([Parameter(Mandatory)][string]$ComputerName, $Credential)
     if (-not $Credential) { $Credential = Get-HostCredential $ComputerName }
     # A host that's off or away shouldn't hold up a command that could use another PC's VMs.
     $option = New-PSSessionOption -OpenTimeout 15000
-    # A host found by multicast name (HOSTNAME.local) sometimes isn't found on the first try, so a
-    # name that can't be resolved gets two more tries.
-    $session = $null
-    for ($try = 1; -not $session; $try++) {
-        try { $session = New-PSSession -ComputerName $ComputerName -Credential $Credential -SessionOption $option -ErrorAction Stop }
-        catch {
-            if ($try -lt 3 -and $_.Exception.Message -match 'cannot be resolved') { Start-Sleep -Seconds 2; continue }
-            throw "Couldn't connect to $ComputerName over PowerShell remoting: $($_.Exception.Message) 'Using VMs on another PC' in vmtest's README says what it needs."
-        }
+    # A host found by multicast name (HOSTNAME.local) sometimes isn't found on the first try, so
+    # finding its address gets three tries before connecting.
+    for ($try = 1; -not (Test-HostResolves $ComputerName); $try++) {
+        if ($try -ge 3) { throw "Couldn't find $ComputerName on the network: its name doesn't resolve to an address. Is it on, and on this network?" }
+        Start-Sleep -Seconds 2
     }
+    try { $session = New-PSSession -ComputerName $ComputerName -Credential $Credential -SessionOption $option -ErrorAction Stop }
+    catch { throw "Couldn't connect to $ComputerName over PowerShell remoting: $($_.Exception.Message) 'Using VMs on another PC' in vmtest's README says what it needs." }
     # vmtest's scripts aren't signed, and a copied file may be marked as from another computer.
     Invoke-OnHost -Session $session -ScriptBlock { try { Set-ExecutionPolicy -Scope Process Bypass -Force } catch { } }
     $session
@@ -1711,7 +1743,7 @@ function Install-VmTestHost {
 function Add-VmTestHostNetwork {
     param([Parameter(Mandatory)][string]$ComputerName)
     $networks = @(Get-CurrentNetworks)
-    if (-not $networks) { throw "This PC isn't connected to a network, so there's nothing to add." }
+    if (-not $networks) { throw "vmtest can't identify the network this PC is on (it needs a network adapter with a router it can see), so there's nothing to add." }
     $session = New-HostSession -ComputerName $ComputerName
     Remove-PSSession $session
     Add-HostNetworks -ComputerName $ComputerName -Networks $networks
@@ -1722,11 +1754,13 @@ function Add-VmTestHostNetwork {
 function Format-HostUseNote {
     param([Parameter(Mandatory)][string]$ComputerName, [string[]]$Networks)
     $known = @(Get-HostNetworks $ComputerName)
-    if ($known) {
-        "From now on, whenever this PC is on $(($known | ForEach-Object { "'$_'" }) -join ' or '), vmtest uses $ComputerName's test VMs along with this PC's own: " +
+    if ($env:VMTEST_HOSTS -or $env:VMTEST_HOST) {
+        "VMTEST_$(if ($env:VMTEST_HOSTS) { 'HOSTS' } else { 'HOST' }) is set, so it decides which PCs' test VMs vmtest uses, not the networks. Clear it to use $ComputerName's along with this PC's own on its networks."
+    } elseif ($known) {
+        "From now on, whenever this PC is on $(@($known | ForEach-Object { Format-Network $_ } | Sort-Object -Unique) -join ' or '), vmtest uses $ComputerName's test VMs along with this PC's own: " +
             "'begin' takes a free VM on either, and 'status' shows both. Nothing needs restarting."
     } else {
-        "This PC isn't on a network vmtest can name, so it won't use $ComputerName on its own. Run 'vmtest host $ComputerName -AddNetwork' once it's on the network the two share."
+        "vmtest couldn't identify the network this PC is on (its name and its router's address), so it won't use $ComputerName on its own. Run 'vmtest host $ComputerName -AddNetwork' once it's on the network the two share."
     }
     "To use only $ComputerName's VMs, run: setx VMTEST_HOST $ComputerName. To choose the PCs yourself, set VMTEST_HOSTS (see vmtest's README)."
 }
@@ -1742,6 +1776,9 @@ function Format-HostUseNote {
 # The networks this PC is connected to now, by name: through its own network adapters only, or a
 # Hyper-V external switch, which shares one. A VPN such as Tailscale, or Hyper-V's internal Default
 # Switch, is connected wherever the PC is, so it would say nothing about where the PC is.
+#
+# A network is known by its name together with its router's hardware address ('ORBI42|9C-C9-...').
+# Anyone can give a Wi-Fi network the same name as yours; matching the router too is much harder.
 function Get-CurrentNetworks {
     $real = @(Get-NetAdapter -Physical -ErrorAction SilentlyContinue | ForEach-Object { [int]$_.InterfaceIndex })
     if (Get-Command Get-VMSwitch -ErrorAction SilentlyContinue) {
@@ -1749,9 +1786,18 @@ function Get-CurrentNetworks {
             $real += @(Get-NetAdapter -Name "vEthernet ($($sw.Name))" -ErrorAction SilentlyContinue | ForEach-Object { [int]$_.InterfaceIndex })
         }
     }
-    @(Get-NetConnectionProfile -ErrorAction SilentlyContinue | Where-Object { $real -contains [int]$_.InterfaceIndex } |
-            ForEach-Object { "$($_.Name)" } | Where-Object { $_ } | Sort-Object -Unique)
+    @(foreach ($profile in @(Get-NetConnectionProfile -ErrorAction SilentlyContinue | Where-Object { $_.Name -and $real -contains [int]$_.InterfaceIndex })) {
+            $i = [int]$profile.InterfaceIndex
+            $gateways = @(Get-NetRoute -DestinationPrefix '0.0.0.0/0' -InterfaceIndex $i -ErrorAction SilentlyContinue | ForEach-Object { $_.NextHop })
+            $mac = @($(foreach ($g in $gateways) { Get-NetNeighbor -IPAddress $g -InterfaceIndex $i -ErrorAction SilentlyContinue | ForEach-Object { "$($_.LinkLayerAddress)" } }) |
+                    Where-Object { $_ -and $_ -notmatch '^(00-)+00$' })[0]
+            # Without the router's address, it can't be told apart from a copy, so it doesn't count.
+            if ($mac) { "$($profile.Name)|$($mac.ToUpperInvariant())" }
+        }) | Sort-Object -Unique
 }
+
+# A network as people say it: its name.
+function Format-Network([string]$Network) { "'$(($Network -split '\|')[0])'" }
 
 function Get-HostNetworksPath([string]$ComputerName) {
     Join-Path (Join-Path $env:LOCALAPPDATA 'vmtest\hosts') "$(Assert-HostName $ComputerName).json"
@@ -1762,7 +1808,8 @@ function Get-HostNetworksPath([string]$ComputerName) {
 function Get-HostNetworks([string]$ComputerName) {
     $p = Get-HostNetworksPath $ComputerName
     if (-not (Test-Path $p)) { return @() }
-    try { @((Get-Content $p -Raw | ConvertFrom-Json).networks | ForEach-Object { "$_" } | Where-Object { $_ }) } catch { @() }
+    # One without its router's address (from an earlier vmtest) can't be told from a copy, so it's dropped.
+    try { @((Get-Content $p -Raw | ConvertFrom-Json).networks | ForEach-Object { "$_" } | Where-Object { $_ -match '^.+\|.+$' }) } catch { @() }
 }
 
 function Add-HostNetworks {
@@ -1897,7 +1944,8 @@ function Invoke-VmTestLocally {
         }
         [pscustomobject]@{ Output = @($out | ForEach-Object { "$_" }); ExitCode = 0; Busy = $false }
     } catch {
-        [pscustomobject]@{ Output = @("vmtest $Command failed: $($_.Exception.Message)"); ExitCode = 1; Busy = [bool]$_.Exception.Data['vmtestBusy'] }
+        [pscustomobject]@{ Output = @("vmtest $Command failed: $($_.Exception.Message)"); ExitCode = 1; Busy = [bool]$_.Exception.Data['vmtestBusy']
+            SameTask = [bool]$_.Exception.Data['vmtestSameTask'] }
     } finally { $env:VMTEST_ROUTED = $before }
 }
 
@@ -1907,7 +1955,8 @@ function Invoke-VmTestAt {
     if ($HostName -eq 'local') { return Invoke-VmTestLocally -Command $Command -Parameters $Parameters }
     try {
         $r = Invoke-VmTestOnHost -Command $Command -Parameters $Parameters -ComputerName $HostName -Routed
-        [pscustomobject]@{ Output = @($r.Output); ExitCode = [int]$r.ExitCode; Busy = ([int]$r.ExitCode -eq 75) }
+        # 75: every VM is busy; 76: another open session has this same task's VM there.
+        [pscustomobject]@{ Output = @($r.Output); ExitCode = [int]$r.ExitCode; Busy = ([int]$r.ExitCode -in 75, 76); SameTask = ([int]$r.ExitCode -eq 76) }
     } catch {
         [pscustomobject]@{ Output = @("Couldn't reach ${HostName}: $($_.Exception.Message)"); ExitCode = 1; Busy = $false; Unreachable = $true }
     }
@@ -1973,6 +2022,10 @@ function Invoke-VmTestRouted {
     }
     # Setting up a PC's VMs: this PC's, or the one -HostName names.
     if ($Command -eq 'prepare') {
+        if (-not $chosen -and $Hosts -notcontains 'local') {
+            if ($Hosts.Count -ne 1) { throw "This PC has no test VMs of its own, so say which PC to prepare: -HostName $($Hosts -join ' or -HostName ')." }
+            $chosen = $Hosts[0]
+        }
         if (-not $chosen -or $chosen -eq 'local') { return $here }
         $r = Invoke-VmTestAt -HostName $chosen -Command 'prepare' -Parameters $p
         return & $done $r.Output $r.ExitCode
@@ -2050,7 +2103,7 @@ function Invoke-RoutedBegin {
         if (-not $r.Busy -or -not $wait -or (Get-Date) -ge $deadline) {
             return [pscustomobject]@{ Here = $false; Output = @($r.Output); ExitCode = $r.ExitCode }
         }
-        if (-not $said) { Write-Host "Waiting: $(@($r.Output) -join ' ')"; $said = $true }
+        if (-not $said) { Write-Host "Waiting, because $((@($r.Output) -join ' ') -replace '^vmtest begin failed: ', '')"; $said = $true }
         Write-Host 'Still waiting; trying every PC again in 30 seconds.'
         Start-Sleep -Seconds 30
     }
@@ -2080,6 +2133,7 @@ function Start-RoutedBegin {
         return & $fail $false "vmtest begin failed: $($Task.Repo) / $($Task.Branch) already has '$($holder.Where.holds)' on $(Format-HostLabel $holder.Host). Run 'vmtest save' first, then 'vmtest begin -HostName $Chosen'."
     }
     $tries = @()
+    $withMine = @()
     if ($holder) { $tries += [pscustomobject]@{ Host = $holder.Host; FreeOnly = $false } }
     else {
         # -VM names a VM on one PC: the one -HostName names, else where the task was placed, else the first.
@@ -2099,19 +2153,38 @@ function Start-RoutedBegin {
     }
     $failures = [ordered]@{}
     $allBusy = $true
+    $stop = $false
     foreach ($t in $tries) {
         $q = @{} + $p
         if ($t.FreeOnly) { $q.FreeOnly = $true }
         $r = Invoke-VmTestAt -HostName $t.Host -Command 'begin' -Parameters $q
         if ($r.ExitCode -eq 0) {
             Set-PlacedHost -Task $Task -HostName $t.Host
-            return [pscustomobject]@{ Busy = $false; ExitCode = 0; Output = @(Add-HostLabel -HostName $t.Host -Lines $r.Output) }
+            $out = @(Add-HostLabel -HostName $t.Host -Lines $r.Output)
+            # A checkpoint can't move between PCs, so say where this task's saved state stayed.
+            $left = @($withMine | Where-Object { $_.Host -ne $t.Host })
+            if ($left -and -not @($withMine | Where-Object { $_.Host -eq $t.Host })) {
+                $out += "This task's saved checkpoint is on $(Format-HostLabel $left[0].Host), where no VM was free, so this started from Clean. " +
+                    "Saving here makes a new checkpoint on $(Format-HostLabel $t.Host); the one on $(Format-HostLabel $left[0].Host) stays until 'vmtest end'."
+            }
+            return [pscustomobject]@{ Busy = $false; ExitCode = 0; Output = $out }
         }
         if (-not $r.Busy) { $allBusy = $false }
         # The second round's answer is the fuller one; it replaces the first's.
         $failures[$t.Host] = @($r.Output | ForEach-Object { "$_" -replace '^vmtest begin failed: ', '' })
+        # Another open session has this same task's VM there: a VM on another PC would make two
+        # VMs for one task. Wait for that one instead.
+        if ($r.SameTask) { $stop = $true; break }
+        if (-not $r.Busy) {
+            # A begin that failed partway may have taken the VM there; never take this task a second.
+            $after = @(Get-WhereEverywhere -Hosts @($t.Host) -Task $Task)[0]
+            if (-not $after.Where -or $after.Where.holds) { $stop = $true; break }
+        }
+        if ($holder) { break }
     }
-    $out = @(if ($holder) { "vmtest begin failed:" } else { "vmtest begin failed: no test VM is free on any PC." })
+    $out = @(if ($stop) { "vmtest begin failed, and stopped there rather than take this task a VM on another PC as well:" }
+        elseif ($allBusy -and -not $holder) { "vmtest begin failed: no test VM is free on any PC." }
+        else { "vmtest begin failed on every PC:" })
     foreach ($h in $failures.Keys) { $out += @(Add-HostLabel -HostName $h -Lines $failures[$h]) }
     $out += $unreachable
     & $fail $allBusy $out
@@ -2133,10 +2206,14 @@ function Invoke-RoutedEnd {
         $first = @($all | Where-Object { $_.Where } | ForEach-Object { $_.Host })[0]
         $targets = @(if ($first) { $first } else { $Hosts[0] })
     }
+    # -Force (and -VM) reset a VM, so they go only to the PC holding the task's VM, or the one named.
+    $forceHost = if ($Parameters.VM -or $Chosen) { $targets[0] } else { @($all | Where-Object { $_.Where -and $_.Where.holds } | ForEach-Object { $_.Host })[0] }
     $out = @()
     $code = 0
     foreach ($h in $targets) {
-        $r = Invoke-VmTestAt -HostName $h -Command 'end' -Parameters $Parameters
+        $q = @{} + $Parameters
+        if ($h -ne $forceHost) { $q.Remove('Force'); $q.Remove('VM') }
+        $r = Invoke-VmTestAt -HostName $h -Command 'end' -Parameters $q
         $out += @(Add-HostLabel -HostName $h -Lines $r.Output)
         if ($r.ExitCode -ne 0) { $code = $r.ExitCode }
     }
@@ -2150,4 +2227,4 @@ Export-ModuleMember -Function Get-VmTestConfig, Get-PoolNames, ConvertTo-TaskChe
     Set-VmTestLock, Clear-VmTestLock, Assert-LockedBy, Assert-TaskHasVM, Find-TaskVM, Invoke-GuestAgent, Invoke-VmTestPrepare,
     Invoke-VmTestBegin, Invoke-VmTestDeploy, Invoke-VmTestPush, Invoke-VmTestRun, Invoke-VmTestShot, Select-VMToLookAt,
     Invoke-VmTestSave, Invoke-VmTestEnd, Get-VmTestStatus, Test-ForwardToHost, Invoke-VmTestOnHost, Install-VmTestHost,
-    Add-VmTestHostNetwork, Get-VmTestHosts, Invoke-VmTestRouted, Get-VmTestWhere, Format-Where
+    Add-VmTestHostNetwork, Get-VmTestHosts, Invoke-VmTestRouted, Get-VmTestWhere, Format-Where, Assert-HostNameHere
