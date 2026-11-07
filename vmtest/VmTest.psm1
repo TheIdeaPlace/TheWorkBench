@@ -619,6 +619,7 @@ function Save-TestCheckpoint {
 function Save-TaskState {
     param([Parameter(Mandatory)][string]$Checkpoint, [Parameter(Mandatory)][string]$VMName)
     Use-TestVM $VMName {
+        Set-TestVMSettings
         Save-TestCheckpoint $Checkpoint
         $vm = Get-TestVM
         if ($vm.State -eq 'Running') { Save-VM -Name $vm.Name }
@@ -645,13 +646,30 @@ function Restore-TestCheckpoint {
     if (-not (Test-Checkpoint $Name)) { throw "The test VM '$($vm.Name)' has no checkpoint named '$Name'." }
     if ($vm.State -ne 'Off' -and $vm.State -ne 'Saved') { Stop-VM -Name $vm.Name -TurnOff -Force }
     Restore-VMSnapshot -VMName $vm.Name -Name $Name -Confirm:$false
+    Set-TestVMSettings
 }
 
-# Standard checkpoints keep the running VM's memory, so a task comes back with its apps still open.
-# New VMs use Production checkpoints, which save a shut-down VM instead.
-function Set-StandardCheckpoints {
+# The settings every test VM needs, applied whenever vmtest takes or makes one:
+# - Standard checkpoints keep the running VM's memory, so a task comes back with its apps still open.
+#   New VMs use Production checkpoints, which save a shut-down VM instead.
+# - No automatic start. vmtest parks a free VM by saving it, and Hyper-V's default start action,
+#   StartIfRunning, counts a saved VM as running: a host reboot woke every free VM in the pool, and
+#   they sat there using memory with nobody holding them.
+# A checkpoint stores the VM's configuration, so restoring one made before this setting existed
+# turns automatic start back on: Restore-TestCheckpoint applies these settings again afterwards.
+function Set-TestVMSettings {
     $vm = Get-TestVM
     if ($vm.CheckpointType -ne 'Standard') { Set-VM -Name $vm.Name -CheckpointType Standard }
+    Disable-AutoStart $vm
+}
+
+# A safety net, not a precondition: if Hyper-V refuses the change (a VM caught mid-transition),
+# say so and carry on rather than failing begin, save or end.
+function Disable-AutoStart {
+    param($VM = (Get-TestVM))
+    if ("$($VM.AutomaticStartAction)" -eq 'Nothing') { return }
+    try { Set-VM -Name $VM.Name -AutomaticStartAction Nothing -ErrorAction Stop }
+    catch { Write-Warning "Couldn't turn off automatic start on '$($VM.Name)', so a restart of this PC may wake it: $($_.Exception.Message)" }
 }
 
 function New-GuestSession {
@@ -853,7 +871,7 @@ function Invoke-VmTestPrepare {
         if ((Test-Checkpoint $script:CleanCheckpoint) -and -not $Force) {
             throw "'$name' already has a Clean checkpoint. Use -Force to replace it."
         }
-        Set-StandardCheckpoints
+        Set-TestVMSettings
         if ($vm.State -ne 'Running') { Start-VM -Name $vm.Name }
         Initialize-TestVM
         Save-TestCheckpoint $script:CleanCheckpoint
@@ -1008,6 +1026,7 @@ function New-PoolClone {
     if ($vm.State -eq 'Saved') { Remove-VMSavedState -VM $vm }
     Set-UniqueMacAddress $vm
     Use-TestVM $Name {
+        Set-TestVMSettings
         if (-not (Test-RoomToStart (Get-TestVM))) {
             throw "$(Get-PCLabel) has $(Format-GB (Get-HostFreeMemoryBytes)) of memory free, not enough to start it and keep $((Get-VmTestConfig).ReserveGB) GB for the PC."
         }
@@ -1145,6 +1164,9 @@ function Start-TaskOnVM {
         if ($VM -and @($pool | ForEach-Object Name) -notcontains $VM) {
             throw "'$VM' isn't one of the test VMs ready to use: $(($pool | ForEach-Object { "'$($_.Name)'" }) -join ', ')."
         }
+        # Every VM in the pool, not just the one handed out: a free VM nobody takes would otherwise
+        # keep waking whenever the PC restarts.
+        foreach ($v in $pool) { Disable-AutoStart $v }
         $locks = @{}
         foreach ($v in $pool) { $locks[$v.Name] = Get-VmTestLock $v.Name }
         foreach ($v in $pool) { Use-TestVM $v.Name { Repair-TaskCheckpoint $Task.Checkpoint $Task.Legacy } }
@@ -1183,7 +1205,7 @@ function Start-TaskOnVM {
                 Set-VmTestLock -Task $Task
             }
             Clear-TakenNote $Task
-            Set-StandardCheckpoints
+            Set-TestVMSettings
             switch ($mine.State) {
                 'Running' { $from = 'the running VM (this task already had it)' }
                 'Paused' { Resume-VM -Name $mine.Name; $from = 'the paused VM (this task already had it)' }
@@ -1208,7 +1230,6 @@ function Start-TaskOnVM {
             $script:CurrentVM = $target.Name
             Set-VmTestLock -Task $Task -Force
             Clear-TakenNote $Task
-            Set-StandardCheckpoints
             $own = Test-Checkpoint $Task.Checkpoint
             $from = if ($own) { "this task's checkpoint '$($Task.Checkpoint)'" } else { $script:CleanCheckpoint }
             Restore-TestCheckpoint $(if ($own) { $Task.Checkpoint } else { $script:CleanCheckpoint })

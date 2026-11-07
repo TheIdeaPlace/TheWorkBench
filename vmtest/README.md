@@ -28,6 +28,10 @@ It's made of two parts:
    - turns on automatic sign-in and turns off Windows' passwordless-only setting, which blocks automatic sign-in;
    - keeps the screen on;
    - switches the VM to Standard checkpoints, so a task comes back with its programs still open;
+   - turns off the VM's automatic start, since Hyper-V counts a saved (free) VM as running and would
+     wake the whole pool whenever the PC restarts. `begin` turns it off on every VM in the pool, and
+     every checkpoint restore turns it off again, since a checkpoint brings back the setting it was
+     taken with;
    - installs the agent;
    - saves the VM as the **Clean** checkpoint.
 
