@@ -16,8 +16,10 @@ Import-Module (Join-Path $root 'VmTest.psm1') -Force
 # ---- the fake Hyper-V --------------------------------------------------------------------------
 # $global:Fake.VMs holds each fake VM's state and checkpoints. $global:Fake.Checkpoints, .Calls and
 # FakeVM are the first VM's, which is all the one-VM tests look at.
-function New-FakeVM([string[]]$Checkpoints = @('Clean'), [string]$State = 'Saved', [string]$CheckpointType = 'Standard', [string]$Notes = '') {
-    @{ Checkpoints = [System.Collections.Generic.List[string]]@($Checkpoints); State = $State; CheckpointType = $CheckpointType
+function New-FakeVM([string[]]$Checkpoints = @('Clean'), [string]$State = 'Saved', [string]$CheckpointType = 'Standard', [string]$Notes = '',
+    [string]$AutoStart = 'Nothing', [string]$CheckpointAutoStart = '') {
+    @{ Checkpoints = [System.Collections.Generic.List[string]]@($Checkpoints); State = $State; CheckpointType = $CheckpointType; AutoStart = $AutoStart
+        CheckpointAutoStart = $CheckpointAutoStart
         Calls = New-Object System.Collections.Generic.List[string]; Notes = $Notes }
 }
 function FakeVM([string]$Name = $env:VMTEST_VM) { $global:Fake.VMs[$Name] }
@@ -29,7 +31,7 @@ function Use-FakePool {
         $names = if ($Name) { $Name } else { $global:Fake.VMs.Keys }
         foreach ($n in $names) {
             $v = $global:Fake.VMs[$n]
-            if ($v) { [pscustomobject]@{ Name = $n; State = $v.State; CheckpointType = $v.CheckpointType; MemoryStartup = 4GB; Notes = $v.Notes; Id = $n } }
+            if ($v) { [pscustomobject]@{ Name = $n; State = $v.State; CheckpointType = $v.CheckpointType; AutomaticStartAction = $v.AutoStart; MemoryStartup = 4GB; Notes = $v.Notes; Id = $n } }
         }
     }
     Mock -ModuleName VmTest Get-VMSnapshot {
@@ -42,12 +44,23 @@ function Use-FakePool {
         $i = $v.Checkpoints.IndexOf($Name); $v.Checkpoints[$i] = $NewName
     }
     Mock -ModuleName VmTest Remove-VMSnapshot { $v = $global:Fake.VMs["$VMName"]; $v.Calls.Add("remove $Name"); [void]$v.Checkpoints.Remove($Name) }
-    Mock -ModuleName VmTest Restore-VMSnapshot { $v = $global:Fake.VMs["$VMName"]; $v.Calls.Add("restore $Name"); $v.State = 'Saved' }
+    # A checkpoint brings back the configuration it was taken with, automatic start included.
+    Mock -ModuleName VmTest Restore-VMSnapshot {
+        $v = $global:Fake.VMs["$VMName"]; $v.Calls.Add("restore $Name"); $v.State = 'Saved'
+        if ($v.CheckpointAutoStart) { $v.AutoStart = $v.CheckpointAutoStart }
+    }
     Mock -ModuleName VmTest Stop-VM { $v = $global:Fake.VMs["$Name"]; $v.Calls.Add('turn off'); $v.State = 'Off' }
     Mock -ModuleName VmTest Start-VM { $v = $global:Fake.VMs["$Name"]; $v.Calls.Add('start'); $v.State = 'Running' }
     Mock -ModuleName VmTest Resume-VM { $v = $global:Fake.VMs["$Name"]; $v.Calls.Add('resume'); $v.State = 'Running' }
     Mock -ModuleName VmTest Save-VM { $v = $global:Fake.VMs["$Name"]; $v.Calls.Add('save vm'); $v.State = 'Saved' }
-    Mock -ModuleName VmTest Set-VM { $v = $global:Fake.VMs["$Name"]; $v.Calls.Add("set $CheckpointType") }
+    Mock -ModuleName VmTest Set-VM {
+        $v = $global:Fake.VMs["$Name"]
+        if ($null -ne $CheckpointType) { $v.Calls.Add("set $CheckpointType"); $v.CheckpointType = "$CheckpointType" }
+        if ($null -ne $AutomaticStartAction) {
+            if ($global:Fake.AutoStartRefused) { throw 'The operation cannot be performed while the virtual machine is in its current state.' }
+            $v.Calls.Add("set autostart $AutomaticStartAction"); $v.AutoStart = "$AutomaticStartAction"
+        }
+    }
     Mock -ModuleName VmTest Get-HostFreeMemoryBytes { $global:Fake.FreeMemory }
     # The guest side: signed in, agent installs fine.
     Mock -ModuleName VmTest Wait-GuestSignedIn {}
@@ -248,6 +261,51 @@ Describe 'begin' {
         Clear-VmTestLock
         Invoke-VmTestBegin -Repo 'r' -Branch 'b' | Out-Null
         $global:Fake.Calls -contains 'set Standard' | Should Be $true
+    }
+    It 'turns off automatic start, so a host reboot does not wake a parked VM' {
+        Use-FakePool @{ $env:VMTEST_VM = (New-FakeVM -Checkpoints 'Clean' -State 'Saved' -AutoStart 'StartIfRunning') }
+        Clear-VmTestLock
+        Invoke-VmTestBegin -Repo 'r' -Branch 'b' | Out-Null
+        $global:Fake.Calls -contains 'set autostart Nothing' | Should Be $true
+        (FakeVM).AutoStart | Should Be 'Nothing'
+    }
+    It 'turns automatic start off again after restoring a checkpoint taken with it on' {
+        Use-FakePool @{ $env:VMTEST_VM = (New-FakeVM -Checkpoints 'Clean' -State 'Saved' -CheckpointAutoStart 'StartIfRunning') }
+        Clear-VmTestLock
+        Invoke-VmTestBegin -Repo 'r' -Branch 'b' | Out-Null
+        (FakeVM).AutoStart | Should Be 'Nothing'
+        $calls = @($global:Fake.Calls)
+        [array]::IndexOf($calls, 'set autostart Nothing') | Should BeGreaterThan ([array]::IndexOf($calls, 'restore Clean'))
+    }
+    It 'end leaves the freed VM saved with automatic start off, even from an old Clean' {
+        Use-FakePool @{ $env:VMTEST_VM = (New-FakeVM -Checkpoints 'Clean' -State 'Running' -CheckpointAutoStart 'StartIfRunning') }
+        Set-VmTestLock -Task (Resolve-Task -Repo 'r' -Branch 'b') -Force
+        Invoke-VmTestEnd -Repo 'r' -Branch 'b' | Out-Null
+        (FakeVM).State | Should Be 'Saved'
+        (FakeVM).AutoStart | Should Be 'Nothing'
+    }
+    It 'save turns automatic start off before taking the checkpoint' {
+        Use-FakePool @{ $env:VMTEST_VM = (New-FakeVM -Checkpoints 'Clean' -State 'Running' -AutoStart 'StartIfRunning') }
+        $task = Resolve-Task -Repo 'r' -Branch 'b'
+        Set-VmTestLock -Task $task -Force
+        Invoke-VmTestSave -Repo 'r' -Branch 'b' | Out-Null
+        $calls = @($global:Fake.Calls)
+        [array]::IndexOf($calls, 'set autostart Nothing') | Should Not Be -1
+        [array]::IndexOf($calls, 'set autostart Nothing') | Should BeLessThan ([array]::IndexOf($calls, "checkpoint $($task.Checkpoint) (new)"))
+        (FakeVM).State | Should Be 'Saved'
+    }
+    It 'carries on with a warning when Hyper-V refuses to change automatic start' {
+        Use-FakePool @{ $env:VMTEST_VM = (New-FakeVM -Checkpoints 'Clean' -State 'Saved' -AutoStart 'StartIfRunning') }
+        $global:Fake.AutoStartRefused = $true
+        Clear-VmTestLock
+        { Invoke-VmTestBegin -Repo 'r' -Branch 'b' -WarningAction SilentlyContinue | Out-Null } | Should Not Throw
+        (FakeVM).State | Should Be 'Running'
+    }
+    It 'leaves automatic start alone when it is already off' {
+        Use-FakeHyperV -Checkpoints 'Clean'
+        Clear-VmTestLock
+        Invoke-VmTestBegin -Repo 'r' -Branch 'b' | Out-Null
+        @($global:Fake.Calls | Where-Object { $_ -like 'set autostart*' }).Count | Should Be 0
     }
     It 'refuses while another task has the VM, and leaves it alone' {
         Use-FakeHyperV -Checkpoints 'Clean'
@@ -1857,6 +1915,14 @@ Describe 'several PCs (VMTEST_HOSTS)' {
                 Use-FakePool @{ $first = (New-FakeVM -State 'Running'); $second = (New-FakeVM -State 'Running') }
                 Set-Idle $first $other 300
                 Set-Idle $second (Resolve-Task -Repo 'Third' -Branch 'y') 5
+            }
+            It 'begin turns automatic start off on the pool VMs it does not hand out, and leaves them saved' {
+                foreach ($n in $first, $second) { Clear-VmTestLock -VMName $n }
+                Use-FakePool @{ $first = (New-FakeVM -State 'Saved'); $second = (New-FakeVM -State 'Saved' -AutoStart 'StartIfRunning') }
+                Invoke-VmTestBegin -Repo 'Mine' -Branch 'x' -VM $first | Out-Null
+                $global:Fake.VMs[$second].AutoStart | Should Be 'Nothing'
+                $global:Fake.VMs[$second].State | Should Be 'Saved'
+                foreach ($n in $first, $second) { Clear-VmTestLock -VMName $n }
             }
             It "with -FreeOnly, begin doesn't save and take an idle VM, and says it's busy" {
                 Use-IdleAndBusy
