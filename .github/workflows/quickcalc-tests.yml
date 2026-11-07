@@ -28,8 +28,8 @@ jobs:
       run:
         working-directory: quickcalc
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 10.0.x
       - name: Build
@@ -40,7 +40,7 @@ jobs:
         run: dotnet test tests/QuickCalc.UiTests -c Release --no-build --logger trx --results-directory TestResults --blame-hang-timeout 2m --blame-hang-dump-type none
       - name: Upload test results
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: quickcalc-test-results
           path: quickcalc/TestResults
