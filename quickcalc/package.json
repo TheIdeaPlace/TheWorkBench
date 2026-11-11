@@ -1,0 +1,9 @@
+{
+  "name": "quickcalc-web",
+  "private": true,
+  "description": "Dependency-free accessible HTML calculator",
+  "scripts": {
+    "test": "node --test tests/web/calculator.test.cjs",
+    "test:browser": "node tests/web/browser.test.cjs"
+  }
+}

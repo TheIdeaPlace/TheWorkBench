@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="A clear, accessible calculator. Type an expression or use the keypad, with full keyboard support and spoken results for screen readers.">
+  <title>QuickCalc — Accessible calculator</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='12' fill='%232b634b'/%3E%3Cpath d='M11 14h8m-4-4v8m8-4h7M11 26h8m4-3h7m-7 6h7' stroke='white' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+  <script src="calculator.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#expression">Skip to calculator</a>
+  <svg class="icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <defs>
+      <symbol id="icon-keyboard" viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" rx="3"/><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 12h.01M10 12h.01M14 12h.01M18 12h.01M7 16h10"/></symbol>
+      <symbol id="icon-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></symbol>
+      <symbol id="icon-history" viewBox="0 0 24 24"><path d="M3 10a9 9 0 1 1 1 7M3 4v6h6M12 7v5l3 2"/></symbol>
+      <symbol id="icon-backspace" viewBox="0 0 24 24"><path d="M9 5h11a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-7-7 7-7Z M12 9l6 6m0-6-6 6"/></symbol>
+      <symbol id="icon-moon" viewBox="0 0 24 24"><path d="M21 13a9 9 0 0 1-10-10 9 9 0 1 0 10 10Z"/></symbol>
+      <symbol id="icon-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/></symbol>
+      <symbol id="icon-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-5-5 5 5-5 5"/></symbol>
+      <symbol id="icon-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+    </defs>
+  </svg>
+
+  <header class="site-header">
+    <a class="brand" href="index.html" aria-label="QuickCalc home">
+      <span class="brand-mark" aria-hidden="true"><span>+</span><span>−</span><span>×</span><span>=</span></span>
+      <span>QuickCalc<span class="brand-dot">.</span></span>
+    </a>
+    <nav class="header-actions" aria-label="Calculator tools">
+      <button type="button" class="button quiet shortcuts-trigger" id="open-shortcuts" aria-label="Keyboard shortcuts" aria-haspopup="dialog"><svg class="icon" aria-hidden="true"><use href="#icon-keyboard"/></svg><span>Keyboard shortcuts</span><kbd aria-hidden="true">?</kbd></button>
+      <span class="header-divider" aria-hidden="true"></span>
+      <button type="button" class="icon-button" id="theme-toggle" aria-label="Switch to dark theme"><svg class="icon" aria-hidden="true"><use href="#icon-moon"/></svg></button>
+    </nav>
+  </header>
+
+  <main id="main">
+    <section class="intro" aria-labelledby="page-title">
+      <p class="eyebrow"><span class="status-dot" aria-hidden="true"></span> A little less mental math</p>
+      <h1 id="page-title">Make room for <span>the answer.</span></h1>
+      <p class="intro-description">An everyday calculator, made for everyone.<br class="mobile-break"> Click, type, or find your own rhythm.</p>
+    </section>
+
+    <div class="workspace">
+      <section class="calculator card" aria-labelledby="calculator-heading">
+        <div class="calculator-toolbar">
+          <h2 id="calculator-heading">Calculator</h2>
+          <button type="button" class="button mode-button" id="scientific-toggle" aria-expanded="false" aria-controls="scientific-keys"><span aria-hidden="true">ƒx</span> Scientific <span class="chevron" aria-hidden="true">⌄</span></button>
+        </div>
+
+        <form id="calculator-form" novalidate>
+          <div class="display" id="display">
+            <div class="display-heading"><label for="expression">Your calculation</label><button type="button" id="backspace" class="icon-button" aria-label="Delete previous character"><svg class="icon" aria-hidden="true"><use href="#icon-backspace"/></svg></button></div>
+            <input id="expression" name="expression" type="text" inputmode="text" placeholder="e.g. 128 × 4" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="2000" aria-describedby="expression-hint calculation-error">
+            <p id="calculation-error" class="error-message" hidden></p>
+            <div class="result-row"><label class="result-label" for="result">Result</label><input id="result" type="text" value="0" readonly></div>
+          </div>
+
+          <div class="keypad" id="keypad" role="group" aria-label="Calculator keypad" aria-describedby="keypad-hint">
+            <div id="scientific-keys" class="scientific-keys" hidden>
+              <div class="angle-control"><label for="angle-mode">Angle unit</label><select id="angle-mode"><option value="degrees">Degrees</option><option value="radians">Radians</option></select></div>
+              <div class="key-grid scientific-grid">
+                <button type="button" class="key key-function" data-insert="sin(" aria-label="Sine">sin</button>
+                <button type="button" class="key key-function" data-insert="cos(" aria-label="Cosine">cos</button>
+                <button type="button" class="key key-function" data-insert="tan(" aria-label="Tangent">tan</button>
+                <button type="button" class="key key-function" data-insert="pi" aria-label="Pi">π</button>
+                <button type="button" class="key key-function" data-insert="sqrt(" aria-label="Square root">√</button>
+                <button type="button" class="key key-function" data-insert="^2" aria-label="Squared">x²</button>
+                <button type="button" class="key key-function" data-insert="^" aria-label="Raise to a power">xʸ</button>
+                <button type="button" class="key key-function" data-insert="log(" aria-label="Base ten logarithm">log</button>
+              </div>
+            </div>
+            <div class="key-grid standard-grid">
+              <button type="button" class="key key-clear" data-action="clear" aria-label="All clear">AC</button>
+              <button type="button" class="key key-function" data-action="parentheses" aria-label="Insert parenthesis">( )</button>
+              <button type="button" class="key key-function" data-insert="%" aria-label="Percent">%</button>
+              <button type="button" class="key key-operator" data-insert="÷" aria-label="Divide">÷</button>
+              <button type="button" class="key" data-insert="7" aria-label="7">7</button>
+              <button type="button" class="key" data-insert="8" aria-label="8">8</button>
+              <button type="button" class="key" data-insert="9" aria-label="9">9</button>
+              <button type="button" class="key key-operator" data-insert="×" aria-label="Multiply">×</button>
+              <button type="button" class="key" data-insert="4" aria-label="4">4</button>
+              <button type="button" class="key" data-insert="5" aria-label="5">5</button>
+              <button type="button" class="key" data-insert="6" aria-label="6">6</button>
+              <button type="button" class="key key-operator" data-insert="−" aria-label="Subtract">−</button>
+              <button type="button" class="key" data-insert="1" aria-label="1">1</button>
+              <button type="button" class="key" data-insert="2" aria-label="2">2</button>
+              <button type="button" class="key" data-insert="3" aria-label="3">3</button>
+              <button type="button" class="key key-operator" data-insert="+" aria-label="Add">+</button>
+              <button type="button" class="key key-function" data-action="sign" aria-label="Change sign">+/−</button>
+              <button type="button" class="key" data-insert="0" aria-label="0">0</button>
+              <button type="button" class="key" data-insert="." aria-label="Decimal point">.</button>
+              <button type="button" class="key key-equals" data-action="calculate" aria-label="Equals">=</button>
+            </div>
+          </div>
+          <div class="calculator-bottom"><p id="expression-hint">Press <kbd>Enter</kbd> to calculate</p><button type="button" class="button quiet copy-button" id="copy-result" disabled><svg class="icon" aria-hidden="true"><use href="#icon-copy"/></svg> Copy result</button></div>
+          <p id="keypad-hint" class="sr-only">Each button has its own Tab stop. Use Tab or Shift Tab to move between buttons, and Space or Enter to activate. Arrow keys also move between buttons when your screen reader passes them to the page.</p>
+        </form>
+      </section>
+
+      <aside class="history card" aria-labelledby="history-heading">
+        <div class="history-toolbar"><h2 id="history-heading"><svg class="icon" aria-hidden="true"><use href="#icon-history"/></svg> History <span id="history-count" class="history-count" hidden>0</span></h2><button type="button" id="clear-history" class="button quiet" disabled>Clear</button></div>
+        <div class="history-content">
+          <div class="empty-history" id="empty-history"><span class="empty-icon" aria-hidden="true"><svg class="icon"><use href="#icon-history"/></svg></span><h3>A fresh start.</h3><p>Your calculations will appear here.<br>Select one to use it again.</p></div>
+          <ol class="history-list" id="history-list" aria-label="Past calculations, newest first" hidden></ol>
+        </div>
+        <p class="history-footer"><span class="small-dot" aria-hidden="true"></span> Kept here while this page is open</p>
+      </aside>
+    </div>
+
+    <div class="below-workspace"><p><svg class="icon" aria-hidden="true"><use href="#icon-keyboard"/></svg> Your keyboard is right at home here.</p><span class="below-divider" aria-hidden="true"></span><p>Try <button type="button" class="example-button" id="try-example" aria-label="Try the calculation 80 plus 15 percent">80 + 15% <svg class="icon" aria-hidden="true"><use href="#icon-arrow"/></svg></button></p></div>
+    <noscript><p class="noscript-message">JavaScript is needed to calculate. Please enable JavaScript in your browser to use QuickCalc.</p></noscript>
+  </main>
+
+  <footer class="site-footer"><span>Thoughtfully simple. Open to everyone.</span><span class="footer-note"><span aria-hidden="true">↗</span> Made for every way you calculate</span></footer>
+
+  <dialog id="shortcuts-dialog" aria-labelledby="shortcuts-title" aria-describedby="shortcuts-description">
+    <div class="dialog-heading"><h2 id="shortcuts-title">Make yourself at home.</h2><button type="button" id="close-shortcuts" class="icon-button" aria-label="Close keyboard shortcuts" autofocus><svg class="icon" aria-hidden="true"><use href="#icon-close"/></svg></button></div>
+    <p id="shortcuts-description">Everything you need, at your fingertips.</p>
+    <dl class="shortcut-list"><div><dt>Calculate</dt><dd><kbd>Enter</kbd> or <kbd>=</kbd></dd></div><div><dt>Clear calculation</dt><dd><kbd>Esc</kbd></dd></div><div><dt>Browse history in the input</dt><dd><kbd>↑</kbd> <kbd>↓</kbd></dd></div><div><dt>Move around the keypad</dt><dd><kbd>←</kbd> <kbd>↑</kbd> <kbd>↓</kbd> <kbd>→</kbd></dd></div><div><dt>Press a keypad button</dt><dd><kbd>Space</kbd> or <kbd>Enter</kbd></dd></div><div><dt>Copy result</dt><dd><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>C</kbd></dd></div><div><dt>Open this guide</dt><dd><kbd>?</kbd> or <kbd>F1</kbd></dd></div></dl>
+    <div class="dialog-tip"><strong>A little more than the basics.</strong><p>Type parentheses, powers (<code>2^3</code>), <code>sqrt(16)</code>, <code>sin(30)</code>, <code>pi</code>, or <code>ans</code> for your last answer. Angles start in degrees. <code>80 + 15%</code> adds 15% of 80, giving 92.</p><p>Type in the calculation field, then press Enter. Tab or Shift Tab moves between keypad buttons. Space or Enter presses a button. Your screen reader announces answers and errors.</p></div>
+  </dialog>
+  <div class="sr-only" id="announcer" role="status" aria-live="polite" aria-atomic="true"></div>
+</body>
+</html>
