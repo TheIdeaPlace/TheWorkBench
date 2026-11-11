@@ -332,6 +332,10 @@ for (const g of GAMES) {
          * move, so it never had an address at the top of the site, and a map
          * entry would send /ios/ to a directory with nothing in it to open. */
         if (g.name === 'ios') continue;
+        /* Only a README saying the Windows app moved to TheIdeaPlace/TheCardPlace
+         * (#227). Like ios, it was native source, never a page at the top of
+         * the site, so there is no old address for 404.html to send on. */
+        if (g.name === 'windows') continue;
         check(moved.has(g.name),
           gamesDir + '/' + g.name + ' is not in 404.html\'s MOVED map. If it was ' +
           'ever published at the top of the site, that address is a 404 again ' +
