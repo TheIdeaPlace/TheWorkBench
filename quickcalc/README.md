@@ -4,7 +4,30 @@ An accessible calculator for Windows, built first for people using JAWS, NVDA or
 
 You type a whole calculation, such as `12 × (3 − 1)` or `80 + 15%`, and press Enter. The answer is spoken right away, shown in the Result box, and kept in a History list you can review and reuse.
 
-## Accessibility
+## HTML version
+
+Open [`index.html`](index.html) in a modern browser. No installation, internet connection, build step, or server is needed. The HTML version is separate from the Windows app described below.
+
+- Type a whole expression and press Enter or `=`, or use the keypad. Escape clears it.
+- Every keypad button has its own label and Tab stop. Use Tab or Shift+Tab to move between keys, then Space or Enter to press one. Arrow navigation also works when your screen reader passes those keys through. Up and Down in the expression recall history and restore your draft.
+- Results and specific errors are announced through a screen reader live region. Inputs and symbol buttons have accessible names, with visible keyboard focus throughout.
+- Scientific mode adds powers, roots, trigonometry, and degrees/radians. You can type the functions and constants listed below, including `ans` for the previous answer. Percentages work as described below.
+- Select a history entry to reuse it, including its original angle unit. History holds the latest 100 calculations while the page is open; it is not stored or sent anywhere.
+- The layout adapts to narrow windows and zoom, follows your system color preference, offers light/dark switching, and supports forced colors and reduced motion.
+- Open Keyboard shortcuts (`?` or F1) for help. Copy result uses the clipboard when available and otherwise selects the answer for manual copying.
+
+The browser version uses `index.html`, `styles.css`, `calculator.js`, and `app.js`, with no external fonts, libraries, or network requests. Numbers use JavaScript floating point arithmetic and display up to 15 significant digits.
+
+Optional automated checks require Node.js 22 or later; browser checks also need Chrome or Edge installed. Set `QUICKCALC_BROWSER` if the executable is elsewhere. No npm packages are needed.
+
+```text
+npm test
+npm run test:browser
+```
+
+Browser checks use headless Chrome or Edge to exercise actual keyboard input, accessible names, result/error announcements, history, dialog focus, clipboard fallback, direct file opening, narrow layouts, themes, and forced colors. Screenshots and temporary profiles go in the ignored `.web-test/` directory. These checks do not replace manual testing with a screen reader.
+
+## Windows app accessibility
 
 - **Answers are spoken.** Results, errors, and each keypad press are sent to the screen reader as UI Automation notifications, so you hear "equals 36" without moving focus. A newer announcement replaces one that hasn't been spoken yet.
 - **Errors say what's wrong**, for example "Error: Cannot divide by zero". The caret moves to the spot in the expression where the problem is.
