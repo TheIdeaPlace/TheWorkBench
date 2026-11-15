@@ -8,12 +8,10 @@ the store shows exactly what is in build/screenshots/<device>/. Without
   scripts/upload-screenshots.py            # show what would happen
   scripts/upload-screenshots.py --apply
 """
-import argparse, glob, hashlib, json, os, sys, time
+import argparse, glob, hashlib, json, os, time
 from urllib import request
 
-sys.path.insert(0, os.path.expanduser("~/.thecardplace-keys"))
-os.environ.setdefault("ASC_CONFIG", "~/.thecardplace-keys/asc.json")
-import asc  # noqa: E402
+import asc  # beside this file; the key comes from the signing kit
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SHOTS = os.path.join(HERE, "..", "build", "screenshots")

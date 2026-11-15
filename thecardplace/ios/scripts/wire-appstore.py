@@ -19,11 +19,9 @@ What the API cannot do, and has to be done on the website: the App Privacy
 answers, screenshots' review (they are uploaded by upload-screenshots.py), and
 Submit for Review.
 """
-import argparse, json, os, sys
+import argparse, json, os
 
-sys.path.insert(0, os.path.expanduser("~/.thecardplace-keys"))
-os.environ.setdefault("ASC_CONFIG", "~/.thecardplace-keys/asc.json")
-import asc  # noqa: E402
+import asc  # beside this file; the key comes from the signing kit
 
 STORE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "store")
 APPLY = False
