@@ -6,9 +6,12 @@
 # then waits for processing and wires the build up: What-to-Test notes, beta
 # groups, and (unless told not to) external Beta App Review.
 #
-# Credentials live outside the repository in ~/.thecardplace-keys/
-# (asc.json + asc.py, and the .p8 in ~/.appstoreconnect/private_keys/ where
-# altool looks for it). See RELEASE.md.
+# The App Store Connect API key comes from the signing kit, ~/.signing-kit/
+# on this Mac (see RELEASE.md). Overrides, all optional:
+#   ASC_KEY_PATH   the .p8 (default $SIGNING_KIT/asc-api-key.p8,
+#                  SIGNING_KIT defaulting to ~/.signing-kit)
+#   ASC_KEY_ID     default 38ANZ53D9L
+#   ASC_ISSUER_ID  default d36bb41d-a198-401d-b36c-2e4fd15163e1
 #
 # Usage:
 #   scripts/release-testflight.sh --notes scripts/RELEASE_NOTES.txt
@@ -20,10 +23,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 IOS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-KEYS_DIR="$HOME/.thecardplace-keys"
-ASC="$KEYS_DIR/asc.py"
-ASC_JSON="$KEYS_DIR/asc.json"
-export ASC_CONFIG="$ASC_JSON"
+SIGNING_KIT="${SIGNING_KIT:-$HOME/.signing-kit}"
+export ASC_KEY_PATH="${ASC_KEY_PATH:-$SIGNING_KIT/asc-api-key.p8}"
+export ASC_KEY_ID="${ASC_KEY_ID:-38ANZ53D9L}"
+export ASC_ISSUER_ID="${ASC_ISSUER_ID:-d36bb41d-a198-401d-b36c-2e4fd15163e1}"
 
 PROJECT="$IOS_DIR/TheCardPlace.xcodeproj"
 SCHEME="TheCardPlace"
@@ -56,7 +59,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-[[ -f "$ASC" && -f "$ASC_JSON" ]] || die "missing $ASC / $ASC_JSON (App Store Connect credentials not set up)"
+[[ -f "$ASC_KEY_PATH" ]] || die "no App Store Connect key at $ASC_KEY_PATH. Recreate the signing kit with: python3 <The-Idea-Place-Projects>/signing/sync-secrets.py pull-kit (or set ASC_KEY_PATH)"
 if [[ "$UPLOAD_ONLY" -eq 0 ]]; then
   [[ -n "$NOTES" ]] || die "--notes <file> is required (the What-to-Test text)"
   NOTES="$(cd "$(dirname "$NOTES")" && pwd)/$(basename "$NOTES")"
@@ -64,9 +67,6 @@ if [[ "$UPLOAD_ONLY" -eq 0 ]]; then
   [[ -s "$NOTES" ]] || die "notes file is empty: $NOTES"
 fi
 
-read_cfg() { python3 -c "import json;print(json.load(open('$ASC_JSON'))['$1'])"; }
-KEY_ID="$(read_cfg key_id)"
-ISSUER="$(read_cfg issuer_id)"
 
 wire_testflight() {
   local ver="$1" bld="$2"
@@ -116,11 +116,20 @@ IPA="$(/usr/bin/find "$EXPORT_DIR" -maxdepth 1 -name '*.ipa' | head -1)"
 [[ -n "$IPA" ]] || die "no .ipa produced in $EXPORT_DIR"
 echo "  IPA: $IPA"
 
+# altool only finds a key by name, AuthKey_<id>.p8, in a key directory. Give it
+# a private temporary one holding a copy of the kit's key, removed on exit,
+# rather than leaving a second copy in ~/.appstoreconnect/private_keys.
+ALTOOL_KEYS="$(mktemp -d)"
+trap 'rm -rf "$ALTOOL_KEYS"' EXIT
+chmod 700 "$ALTOOL_KEYS"
+cp "$ASC_KEY_PATH" "$ALTOOL_KEYS/AuthKey_${ASC_KEY_ID}.p8"
+export API_PRIVATE_KEYS_DIR="$ALTOOL_KEYS"
+
 step "Validating with App Store Connect"
-xcrun altool --validate-app --type ios --file "$IPA" --apiKey "$KEY_ID" --apiIssuer "$ISSUER"
+xcrun altool --validate-app --type ios --file "$IPA" --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
 
 step "Uploading to App Store Connect"
-xcrun altool --upload-app --type ios --file "$IPA" --apiKey "$KEY_ID" --apiIssuer "$ISSUER"
+xcrun altool --upload-app --type ios --file "$IPA" --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
 echo "  Upload accepted; App Store Connect is now processing the build."
 
 if [[ "$UPLOAD_ONLY" -eq 1 ]]; then

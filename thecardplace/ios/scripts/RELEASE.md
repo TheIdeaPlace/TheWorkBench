@@ -19,16 +19,49 @@ already uploaded, for instance from Xcode).
 
 ## Credentials
 
-They live outside the repository in `~/.thecardplace-keys/` and are never
-committed:
+The App Store Connect API key comes from the signing kit, the one copy of
+every Apple credential, kept in the Azure Key Vault `theideaplace-kit`. On a
+Mac the kit is the folder `~/.signing-kit/`, never committed. The source of
+truth for the kit is
+[signing/README.md in The-Idea-Place-Projects](https://github.com/kellylford/The-Idea-Place-Projects/blob/main/signing/README.md),
+which is a private repository.
 
-- `asc.json` — key id, issuer id, the `.p8` path, and this app's bundle id
-- `asc.py` — the App Store Connect REST client, which signs its own ES256 JWT
+- The key is `~/.signing-kit/asc-api-key.p8`: key ID `38ANZ53D9L`, Admin.
+- The issuer ID is `d36bb41d-a198-401d-b36c-2e4fd15163e1`.
+- On a Mac without the kit folder, sign in to Azure once, then run
+  `python3 <The-Idea-Place-Projects>/signing/sync-secrets.py pull-kit` to
+  recreate it from the vault. If your copy of that repository doesn't have
+  `pull-kit` yet, the signing README's section on a new computer has the
+  `az keyvault secret download` commands instead.
+- To use another key, set `ASC_KEY_PATH`, `ASC_KEY_ID` and `ASC_ISSUER_ID`.
+- Set `SIGNING_KIT` to keep the kit in a different folder.
 
-The private key itself is shared with this developer's other apps and lives in
-`~/.appstoreconnect/private_keys/AuthKey_<id>.p8`, which is where `altool`
-looks for it. The Issuer ID is only shown in App Store Connect under Users and
-Access, then Integrations.
+`release-testflight.sh` checks the key is there before it builds. For the
+upload it copies the key into a private temporary folder named the way
+`altool` expects, `AuthKey_<id>.p8`, and removes it when it finishes, so there
+is nothing to place in `~/.appstoreconnect/private_keys` by hand.
+
+`scripts/asc.py` is the App Store Connect client the other scripts use for
+everything after the upload: What to Test, the beta groups, Beta App Review,
+the listing and the screenshots. It reads the same key and needs only Python's
+standard library and the `openssl` command that comes with macOS. To check the
+key works without changing anything:
+
+```bash
+python3 scripts/asc.py check
+```
+
+Archiving and exporting still sign with the Apple Distribution certificate
+through Xcode's automatic signing, so the certificate has to be in this Mac's
+login keychain. `sync-secrets.py pull-kit --import-certs` puts it there.
+Automatic signing also needs an Apple account signed in to Xcode, under
+Settings, then Accounts, so it can fetch the provisioning profile.
+
+One file stays outside the kit: `~/.thecardplace-keys/review-contact.json`, the
+name, phone and email App Review and TestFlight testers see. It is personal
+contact details rather than a credential, and it is kept out of this public
+repository. The old `asc.json` and `asc.py` that used to sit beside it are no
+longer read, and the key they pointed at is revoked; they can be deleted.
 
 ## Cutting a release
 

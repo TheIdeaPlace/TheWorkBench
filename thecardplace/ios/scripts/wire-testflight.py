@@ -8,14 +8,14 @@ this build's What-to-Test notes, and the external review submission.
 Every step is idempotent — it reads what is there before it writes — so this
 can be re-run on a half-finished release without making a second of anything.
 
-  ASC_CONFIG=~/.thecardplace-keys/asc.json \
   python3 scripts/wire-testflight.py --version 1.0 --build 1 --notes-file notes.txt
-"""
-import argparse, json, os, sys
 
-sys.path.insert(0, os.path.expanduser("~/.thecardplace-keys"))
-os.environ.setdefault("ASC_CONFIG", "~/.thecardplace-keys/asc.json")
-import asc  # noqa: E402
+The App Store Connect key comes from the signing kit, through asc.py beside
+this file (see its docstring for the overrides).
+"""
+import argparse, json, os
+
+import asc
 
 # What a tester sees in TestFlight before they install, and where their
 # feedback goes. Contact details are the same ones this developer's other
@@ -27,8 +27,10 @@ DESCRIPTION = (
     "and where it sits, a card you may not play says why, and everything that "
     "happens is spoken and written down."
 )
-# The contact for Beta App Review, and the feedback address, are kept with the
-# keys rather than in this public repository.
+# The contact for Beta App Review, and the feedback address, are kept in
+# ~/.thecardplace-keys/review-contact.json rather than in this public
+# repository. That file is personal contact details, not a credential; the
+# signing credentials are in the signing kit.
 with open(os.path.expanduser("~/.thecardplace-keys/review-contact.json")) as _f:
     CONTACT = json.load(_f)
 FEEDBACK_EMAIL = CONTACT["contactEmail"]
