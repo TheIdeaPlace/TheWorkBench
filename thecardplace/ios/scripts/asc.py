@@ -65,9 +65,12 @@ def _sign(message):
         from cryptography.hazmat.primitives import hashes, serialization
         from cryptography.hazmat.primitives.asymmetric import ec
     except ImportError:
-        der = subprocess.run(["openssl", "dgst", "-sha256", "-sign", KEY_PATH],
-                             input=message, capture_output=True, check=True).stdout
-        return _der_to_raw(der)
+        r = subprocess.run(["openssl", "dgst", "-sha256", "-sign", KEY_PATH],
+                           input=message, capture_output=True)
+        if r.returncode != 0:
+            why = (r.stderr.decode("utf-8", "replace").strip().splitlines() or ["no detail"])[0]
+            raise SystemExit(f"openssl could not sign with {KEY_PATH}: {why}")
+        return _der_to_raw(r.stdout)
     with open(KEY_PATH, "rb") as f:
         key = serialization.load_pem_private_key(f.read(), password=None)
     return _der_to_raw(key.sign(message, ec.ECDSA(hashes.SHA256())))
@@ -100,7 +103,7 @@ def token():
 def api(method, path, body=None, query=None):
     """One request. path starts with /v1/ or /v2/. Returns (status, json);
     the json is {} when the response has no body. Never raises on an HTTP
-    error status; callers check it."""
+    error status; callers check it. A network failure comes back as status 0."""
     url = API + path
     if query:
         url += "?" + parse.urlencode(query)
@@ -114,6 +117,8 @@ def api(method, path, body=None, query=None):
             status, raw = r.status, r.read()
     except error.HTTPError as e:
         status, raw = e.code, e.read()
+    except (error.URLError, OSError) as e:
+        return 0, {"errors": [{"title": "network error", "detail": str(e)}]}
     if not raw:
         return status, {}
     try:
@@ -169,7 +174,20 @@ def poll_build(app_id, version, build, timeout=1800, interval=30):
     """Wait for the build to finish processing; return its id."""
     deadline = time.time() + timeout
     while True:
-        found = find_build(app_id, version, build)
+        st, j = api("GET", "/v1/builds", query={
+            "filter[app]": app_id, "filter[version]": str(build),
+            "filter[preReleaseVersion.version]": version, "limit": 10})
+        if st == 0 or st == 429 or st >= 500:
+            # A dropped connection or a busy server mid-wait is not a failed
+            # release; try again next interval.
+            print(f"  {version} ({build}): could not ask ({st}: {_errors(j)}); trying again", flush=True)
+            found = None
+        elif not _ok(st):
+            raise SystemExit(f"GET /v1/builds failed ({st}): {_errors(j)}")
+        else:
+            found = (j.get("data") or [None])[0]
+            if not found:
+                print(f"  {version} ({build}): not visible yet", flush=True)
         if found:
             state = found["attributes"].get("processingState")
             print(f"  {version} ({build}): {state}", flush=True)
@@ -177,8 +195,6 @@ def poll_build(app_id, version, build, timeout=1800, interval=30):
                 return found["id"]
             if state in ("FAILED", "INVALID"):
                 raise SystemExit(f"App Store Connect could not process {version} ({build}): {state}")
-        else:
-            print(f"  {version} ({build}): not visible yet", flush=True)
         if time.time() > deadline:
             raise SystemExit(f"{version} ({build}) was not ready after {timeout} seconds; "
                              "run again with --wire-only once it has processed.")
@@ -207,7 +223,13 @@ def set_whats_new(build_id, text, locale="en-US"):
 
 
 def assign_group(build_id, group_id, name):
-    """Add the build to a beta group."""
+    """Add the build to a beta group. An internal group set to get every
+    build already has it, so it is left alone."""
+    st, j = api("GET", f"/v1/betaGroups/{group_id}")
+    attrs = ((j.get("data") or {}).get("attributes") or {}) if _ok(st) else {}
+    if attrs.get("isInternalGroup") and attrs.get("hasAccessToAllBuilds"):
+        print(f"  {name!r} gets every build already")
+        return
     st, j = api("POST", f"/v1/betaGroups/{group_id}/relationships/builds",
                 body={"data": [{"type": "builds", "id": build_id}]})
     if not _ok(st):

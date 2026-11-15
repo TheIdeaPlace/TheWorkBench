@@ -23,15 +23,18 @@ The App Store Connect API key comes from the signing kit, the one copy of
 every Apple credential, kept in the Azure Key Vault `theideaplace-kit`. On a
 Mac the kit is the folder `~/.signing-kit/`, never committed. The source of
 truth for the kit is
-[signing/README.md in The-Idea-Place-Projects](https://github.com/kellylford/The-Idea-Place-Projects/blob/main/signing/README.md).
+[signing/README.md in The-Idea-Place-Projects](https://github.com/kellylford/The-Idea-Place-Projects/blob/main/signing/README.md),
+which is a private repository.
 
 - The key is `~/.signing-kit/asc-api-key.p8`: key ID `38ANZ53D9L`, Admin.
 - The issuer ID is `d36bb41d-a198-401d-b36c-2e4fd15163e1`.
 - On a Mac without the kit folder, sign in to Azure once, then run
   `python3 <The-Idea-Place-Projects>/signing/sync-secrets.py pull-kit` to
-  recreate it from the vault.
+  recreate it from the vault. If your copy of that repository doesn't have
+  `pull-kit` yet, the signing README's section on a new computer has the
+  `az keyvault secret download` commands instead.
 - To use another key, set `ASC_KEY_PATH`, `ASC_KEY_ID` and `ASC_ISSUER_ID`.
-  `SIGNING_KIT` moves the kit folder.
+- Set `SIGNING_KIT` to keep the kit in a different folder.
 
 `release-testflight.sh` checks the key is there before it builds. For the
 upload it copies the key into a private temporary folder named the way
@@ -51,6 +54,8 @@ python3 scripts/asc.py check
 Archiving and exporting still sign with the Apple Distribution certificate
 through Xcode's automatic signing, so the certificate has to be in this Mac's
 login keychain. `sync-secrets.py pull-kit --import-certs` puts it there.
+Automatic signing also needs an Apple account signed in to Xcode, under
+Settings, then Accounts, so it can fetch the provisioning profile.
 
 One file stays outside the kit: `~/.thecardplace-keys/review-contact.json`, the
 name, phone and email App Review and TestFlight testers see. It is personal
