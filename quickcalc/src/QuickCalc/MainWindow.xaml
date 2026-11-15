@@ -1,0 +1,149 @@
+<Window x:Class="QuickCalc.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:QuickCalc"
+        Title="QuickCalc"
+        Width="820" Height="640" MinWidth="520" MinHeight="420"
+        WindowStartupLocation="CenterScreen"
+        FocusManager.FocusedElement="{Binding ElementName=ExpressionBox}">
+    <Window.Resources>
+        <Style x:Key="KeyStyle" TargetType="Button">
+            <Setter Property="MinWidth" Value="64" />
+            <Setter Property="MinHeight" Value="44" />
+            <Setter Property="Margin" Value="3" />
+            <Setter Property="FontSize" Value="18" />
+            <EventSetter Event="Click" Handler="Key_Click" />
+        </Style>
+    </Window.Resources>
+
+    <DockPanel>
+        <!-- Reached with Alt or F10, as in other Windows apps, not with Tab. -->
+        <Menu DockPanel.Dock="Top" KeyboardNavigation.TabNavigation="None" IsTabStop="False">
+            <MenuItem Header="_File">
+                <MenuItem Header="E_xit" InputGestureText="Alt+F4" Click="Exit_Click" />
+            </MenuItem>
+            <MenuItem Header="_Edit">
+                <MenuItem Header="_Copy result" InputGestureText="Ctrl+Shift+C" Click="CopyResult_Click" />
+                <MenuItem Header="C_lear expression" InputGestureText="Esc" Click="ClearExpression_Click" />
+                <Separator />
+                <MenuItem Header="Clear _history" Click="ClearHistory_Click" />
+            </MenuItem>
+            <MenuItem Header="_View">
+                <MenuItem Header="Zoom _in" InputGestureText="Ctrl+Plus" Click="ZoomIn_Click" />
+                <MenuItem Header="Zoom _out" InputGestureText="Ctrl+Minus" Click="ZoomOut_Click" />
+                <MenuItem Header="_Reset zoom" InputGestureText="Ctrl+0" Click="ZoomReset_Click" />
+            </MenuItem>
+            <MenuItem Header="_Help">
+                <MenuItem Header="_Keyboard and features" InputGestureText="F1" Click="Help_Click" />
+                <MenuItem Header="_About QuickCalc" Click="About_Click" />
+            </MenuItem>
+        </Menu>
+
+        <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto" Focusable="False">
+            <Grid x:Name="ZoomRoot" Margin="12">
+                <Grid.LayoutTransform>
+                    <ScaleTransform x:Name="Zoom" ScaleX="1" ScaleY="1" />
+                </Grid.LayoutTransform>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="380" />
+                    <ColumnDefinition Width="16" />
+                    <ColumnDefinition Width="320" />
+                </Grid.ColumnDefinitions>
+
+                <StackPanel x:Name="LeftPanel" Grid.Column="0">
+                    <Label Content="Ex_pression:" Target="{Binding ElementName=ExpressionBox}" Padding="0,0,0,2" />
+                    <TextBox x:Name="ExpressionBox" FontSize="24" Padding="4" AutomationProperties.Name="Expression" MaxLength="1000"
+                             AutomationProperties.HelpText="Type a calculation and press Enter. Up and Down arrows recall earlier calculations. Escape clears."
+                             PreviewKeyDown="ExpressionBox_PreviewKeyDown"
+                             TextChanged="ExpressionBox_TextChanged" />
+
+                    <Label Content="_Result:" Target="{Binding ElementName=ResultBox}" Padding="0,10,0,2" />
+                    <TextBox x:Name="ResultBox" FontSize="28" FontWeight="SemiBold" Padding="4" AutomationProperties.Name="Result"
+                             IsReadOnly="True" IsReadOnlyCaretVisible="True" Text="0" />
+
+                    <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                        <Label Content="_Angle unit:" Target="{Binding ElementName=AngleUnitBox}" VerticalAlignment="Center" />
+                        <ComboBox x:Name="AngleUnitBox" MinWidth="120" SelectedIndex="0" AutomationProperties.Name="Angle unit"
+                                  SelectionChanged="AngleUnit_SelectionChanged">
+                            <ComboBoxItem Content="Degrees" />
+                            <ComboBoxItem Content="Radians" />
+                        </ComboBox>
+                    </StackPanel>
+
+                    <GroupBox x:Name="KeypadGroup" Header="_Keypad" Margin="0,10,0,0" Padding="4"
+                              PreviewTextInput="Keypad_PreviewTextInput">
+                        <UniformGrid x:Name="Keypad" Columns="5"
+                                     KeyboardNavigation.TabNavigation="Once"
+                                     KeyboardNavigation.DirectionalNavigation="Contained">
+                            <Button Style="{StaticResource KeyStyle}" Content="sin" Tag="sin(" AutomationProperties.Name="Sine" />
+                            <Button Style="{StaticResource KeyStyle}" Content="cos" Tag="cos(" AutomationProperties.Name="Cosine" />
+                            <Button Style="{StaticResource KeyStyle}" Content="tan" Tag="tan(" AutomationProperties.Name="Tangent" />
+                            <Button Style="{StaticResource KeyStyle}" Content="ln" Tag="ln(" AutomationProperties.Name="Natural log" />
+                            <Button Style="{StaticResource KeyStyle}" Content="log" Tag="log(" AutomationProperties.Name="Log base 10" />
+
+                            <Button Style="{StaticResource KeyStyle}" Content="&#x221A;" Tag="&#x221A;(" AutomationProperties.Name="Square root" />
+                            <Button Style="{StaticResource KeyStyle}" Content="x&#xB2;" Tag="^2" AutomationProperties.Name="Squared" />
+                            <Button Style="{StaticResource KeyStyle}" Content="x&#x2B8;" Tag="^" AutomationProperties.Name="To the power" />
+                            <Button Style="{StaticResource KeyStyle}" Content="n!" Tag="!" AutomationProperties.Name="Factorial" />
+                            <Button Style="{StaticResource KeyStyle}" Content="|x|" Tag="abs(" AutomationProperties.Name="Absolute value" />
+
+                            <Button Style="{StaticResource KeyStyle}" Content="(" Tag="(" AutomationProperties.Name="Open paren" />
+                            <Button Style="{StaticResource KeyStyle}" Content=")" Tag=")" AutomationProperties.Name="Close paren" />
+                            <Button Style="{StaticResource KeyStyle}" Content="%" Tag="%" AutomationProperties.Name="Percent" />
+                            <Button Style="{StaticResource KeyStyle}" Content="&#x3C0;" Tag="&#x3C0;" AutomationProperties.Name="Pi" />
+                            <Button Style="{StaticResource KeyStyle}" Content="e" Tag="e" AutomationProperties.Name="e" />
+
+                            <Button Style="{StaticResource KeyStyle}" Content="7" Tag="7" />
+                            <Button Style="{StaticResource KeyStyle}" Content="8" Tag="8" />
+                            <Button Style="{StaticResource KeyStyle}" Content="9" Tag="9" />
+                            <Button Style="{StaticResource KeyStyle}" Content="&#xF7;" Tag="&#xF7;" AutomationProperties.Name="Divide" />
+                            <Button Style="{StaticResource KeyStyle}" Content="&#x232B;" Tag="{x:Static local:KeyCommands.Backspace}" AutomationProperties.Name="Backspace" />
+
+                            <Button Style="{StaticResource KeyStyle}" Content="4" Tag="4" />
+                            <Button Style="{StaticResource KeyStyle}" Content="5" Tag="5" />
+                            <Button Style="{StaticResource KeyStyle}" Content="6" Tag="6" />
+                            <Button Style="{StaticResource KeyStyle}" Content="&#xD7;" Tag="&#xD7;" AutomationProperties.Name="Multiply" />
+                            <Button Style="{StaticResource KeyStyle}" Content="C" Tag="{x:Static local:KeyCommands.Clear}" AutomationProperties.Name="Clear" />
+
+                            <Button Style="{StaticResource KeyStyle}" Content="1" Tag="1" />
+                            <Button Style="{StaticResource KeyStyle}" Content="2" Tag="2" />
+                            <Button Style="{StaticResource KeyStyle}" Content="3" Tag="3" />
+                            <Button Style="{StaticResource KeyStyle}" Content="&#x2212;" Tag="&#x2212;" AutomationProperties.Name="Minus" />
+                            <Button Style="{StaticResource KeyStyle}" Content="Ans" Tag="ans" AutomationProperties.Name="Previous answer" />
+
+                            <Button Style="{StaticResource KeyStyle}" Content="0" Tag="0" />
+                            <Button Style="{StaticResource KeyStyle}" Content="." Tag="." AutomationProperties.Name="Point" />
+                            <Button Style="{StaticResource KeyStyle}" Content="00" Tag="00" AutomationProperties.Name="Double zero" />
+                            <Button Style="{StaticResource KeyStyle}" Content="+" Tag="+" AutomationProperties.Name="Plus" />
+                            <Button Style="{StaticResource KeyStyle}" Content="=" Tag="{x:Static local:KeyCommands.Calculate}" AutomationProperties.Name="Equals" />
+                        </UniformGrid>
+                    </GroupBox>
+                </StackPanel>
+
+                <!-- As tall as the left side, so the list scrolls by itself instead of stretching the window. -->
+                <DockPanel Grid.Column="2" Height="{Binding ActualHeight, ElementName=LeftPanel}">
+                    <Label DockPanel.Dock="Top" Content="Histor_y:" Target="{Binding ElementName=HistoryList}" Padding="0,0,0,2" />
+                    <ListBox x:Name="HistoryList"
+                             AutomationProperties.Name="History"
+                             AutomationProperties.HelpText="Enter puts the calculation back in the expression box. Ctrl+C copies it. Delete removes it."
+                             PreviewKeyDown="HistoryList_PreviewKeyDown"
+                             GotKeyboardFocus="HistoryList_GotKeyboardFocus"
+                             MouseDoubleClick="HistoryList_MouseDoubleClick">
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="AutomationProperties.Name" Value="{Binding DisplayText}" />
+                                <Setter Property="FontSize" Value="16" />
+                                <Setter Property="Padding" Value="4,3" />
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding DisplayText}" TextWrapping="Wrap" />
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </DockPanel>
+            </Grid>
+        </ScrollViewer>
+    </DockPanel>
+</Window>
