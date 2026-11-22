@@ -1531,10 +1531,14 @@ function New-HostSession {
     # A host that's off or away shouldn't hold up a command that could use another PC's VMs.
     $option = New-PSSessionOption -OpenTimeout 15000
     # A host found by multicast name (HOSTNAME.local) sometimes isn't found on the first try, so
-    # finding its address gets three tries before connecting.
+    # finding its address gets five tries, about 12 seconds, before connecting. Three tries over 4
+    # seconds weren't enough: a UI probe making dozens of runs against a host that was there all
+    # along failed on one of them nearly every time (AIChat #706). In the pool, a host on another
+    # network is passed over before this (Get-VmTestHosts' network check), so the longer wait
+    # falls only on a host that's on this network but not answering, or one named by VMTEST_HOST.
     for ($try = 1; -not (Test-HostResolves $ComputerName); $try++) {
-        if ($try -ge 3) { throw "Couldn't find $ComputerName on the network: its name doesn't resolve to an address. Is it on, and on this network?" }
-        Start-Sleep -Seconds 2
+        if ($try -ge 5) { throw "Couldn't find $ComputerName on the network: its name doesn't resolve to an address. Is it on, and on this network?" }
+        Start-Sleep -Seconds 3
     }
     try { $session = New-PSSession -ComputerName $ComputerName -Credential $Credential -SessionOption $option -ErrorAction Stop }
     catch { throw "Couldn't connect to $ComputerName over PowerShell remoting: $($_.Exception.Message) 'Using VMs on another PC' in vmtest's README says what it needs." }

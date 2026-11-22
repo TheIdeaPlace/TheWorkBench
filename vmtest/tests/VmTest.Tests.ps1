@@ -1159,13 +1159,15 @@ Describe 'another PC (VMTEST_HOST)' {
                 Use-FakeHost
                 $global:Lookups = 0
                 Mock -ModuleName VmTest Start-Sleep {}
-                Mock -ModuleName VmTest Test-HostResolves { $global:Lookups++; $global:Lookups -ge 3 }
+                Mock -ModuleName VmTest Test-HostResolves { $global:Lookups++; $global:Lookups -ge 5 }
                 Invoke-VmTestOnHost -Command 'status' -Parameters @{} | Out-Null
-                $global:Lookups | Should Be 3
+                $global:Lookups | Should Be 5
                 $global:Lookups = 0
                 Mock -ModuleName VmTest Test-HostResolves { $global:Lookups++; $false }
                 { Invoke-VmTestOnHost -Command 'status' -Parameters @{} } | Should Throw "Couldn't find HOSTNAME on the network"
-                $global:Lookups | Should Be 3
+                $global:Lookups | Should Be 5
+                # About 12 seconds each time: four waits of 3 seconds between the five tries.
+                Assert-MockCalled -ModuleName VmTest Start-Sleep -Times 8 -Exactly -Scope It -ParameterFilter { $Seconds -eq 3 }
                 Assert-MockCalled -ModuleName VmTest New-PSSession -Times 1 -Exactly -Scope It
                 Mock -ModuleName VmTest Test-HostResolves { $true }
                 $global:Tries = 0
