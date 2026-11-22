@@ -1526,15 +1526,21 @@ function Test-HostResolves([string]$ComputerName) {
 }
 
 function New-HostSession {
-    param([Parameter(Mandatory)][string]$ComputerName, $Credential)
+    param([Parameter(Mandatory)][string]$ComputerName, $Credential, [switch]$Patient)
     if (-not $Credential) { $Credential = Get-HostCredential $ComputerName }
     # A host that's off or away shouldn't hold up a command that could use another PC's VMs.
     $option = New-PSSessionOption -OpenTimeout 15000
     # A host found by multicast name (HOSTNAME.local) sometimes isn't found on the first try, so
-    # finding its address gets three tries before connecting.
+    # finding its address gets three tries, about 4 seconds, before connecting. That's for a
+    # command asking which PCs answer (status, begin, where, end across the pool), where a PC
+    # that's switched off would otherwise hold up every one. A command sent to the one PC it has
+    # to use (-Patient: VMTEST_HOST) gets five tries over about 12 seconds: with three, a UI probe
+    # making dozens of runs against a host that was there all along failed on one of them nearly
+    # every time (AIChat #706).
+    $tries, $wait = if ($Patient) { 5, 3 } else { 3, 2 }
     for ($try = 1; -not (Test-HostResolves $ComputerName); $try++) {
-        if ($try -ge 3) { throw "Couldn't find $ComputerName on the network: its name doesn't resolve to an address. Is it on, and on this network?" }
-        Start-Sleep -Seconds 2
+        if ($try -ge $tries) { throw "Couldn't find $ComputerName on the network: its name doesn't resolve to an address. Is it on, and on this network?" }
+        Start-Sleep -Seconds $wait
     }
     try { $session = New-PSSession -ComputerName $ComputerName -Credential $Credential -SessionOption $option -ErrorAction Stop }
     catch { throw "Couldn't connect to $ComputerName over PowerShell remoting: $($_.Exception.Message) 'Using VMs on another PC' in vmtest's README says what it needs." }
@@ -1688,7 +1694,9 @@ function Invoke-VmTestOnHost {
     $taskError = $null
     try { $task = Resolve-Task -Repo $params.Repo -Branch $params.Branch } catch { $taskError = $_.Exception.Message }
     if ($task) { $params.Repo = $task.Repo; $params.Branch = $task.Branch }
-    $session = New-HostSession -ComputerName $computer
+    # Routed: one of several PCs vmtest is choosing among, so a quick no is better. Otherwise
+    # it's VMTEST_HOST, the only PC this command can use, so it waits longer for its name.
+    $session = New-HostSession -ComputerName $computer -Patient:(-not $Routed)
     try {
         $tool = Get-HostToolPath
         Sync-HostTool -Session $session -Path $tool | Out-Null
