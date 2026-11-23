@@ -22,26 +22,37 @@ function Invoke-WithGuestSession([scriptblock]$Body) {
 # there: so the session goes to the host, and from the host into the VM, as AIChat's visual probe
 # (tools/ui_probe_vm.ps1) does. $Body gets the host session, with the VM's session in the host's
 # $global:vmfilesGuest. Without this, setup-rig and clip failed with "doesn't hold a test VM",
-# because the VM's lock is kept on the host, not here.
+# because the VM's lock is kept on the host, not here. Only VMTEST_HOST is covered: with
+# VMTEST_HOSTS, or a host vmtest picks for itself from the network, these still look on this PC
+# (TheWorkBench #251).
 function Invoke-WithHostGuestSession([scriptblock]$Body) {
     $m = Import-Module (Get-VmTestModulePath) -Force -PassThru -DisableNameChecking
     try {
         $checkpoint = (& $m { Resolve-Task }).Checkpoint
         $hostSession = & $m { New-HostSession -ComputerName $env:VMTEST_HOST -Patient }
         $tool = & $m { Get-HostToolPath }
+        # The host's copy of vmtest made current, as vmtest's own forwarding does before every
+        # command: a call made on its own would otherwise import an older one, or none.
+        & $m { param($s, $p) Sync-HostTool -Session $s -Path $p | Out-Null } $hostSession $tool
+    } catch {
+        if ($hostSession) { Remove-PSSession $hostSession }
+        throw
     } finally { Remove-Module $m -ErrorAction SilentlyContinue }
     try {
-        Invoke-Command -Session $hostSession -ArgumentList $tool, $checkpoint -ScriptBlock {
+        Invoke-Command -Session $hostSession -ArgumentList $tool, $checkpoint -ErrorAction Stop -ScriptBlock {
             param($tool, $checkpoint)
             $hm = Import-Module (Join-Path $tool 'VmTest.psm1') -Force -PassThru -DisableNameChecking
+            # vmtest's own lookup and guest session: its retry while PowerShell Direct isn't
+            # ready, and its messages for a VM that's off or an account it refuses.
             $global:vmfilesGuest = & $hm {
                 param($checkpoint)
-                $name = foreach ($vm in Get-PoolNames) {
-                    $held = Get-VmTestLock $vm
-                    if ($held -and $held.checkpoint -eq $checkpoint) { $vm; break }
-                }
+                $name = Find-TaskVM ([pscustomobject]@{ Checkpoint = $checkpoint })
                 if (-not $name) { throw "This task doesn't hold a test VM on $env:COMPUTERNAME. Run 'vmtest begin' first." }
-                New-PSSession -VMName $name -Credential (Get-GuestCredential)
+                Use-TestVM $name {
+                    $vm = Get-TestVM
+                    if ($vm.State -ne 'Running') { throw "The test VM '$name' is $($vm.State). Run 'vmtest begin' again." }
+                    New-GuestSession
+                }
             } $checkpoint
         }
         & $Body $hostSession
@@ -67,11 +78,13 @@ function Copy-FromTestVM {
     # Out of the VM to a folder on the host, then from the host to here.
     Invoke-WithHostGuestSession {
         param($h)
-        $stage = Invoke-Command -Session $h -ArgumentList $Source -ScriptBlock {
+        # Under vmtest's own staging folder, which it sweeps of anything a day old.
+        $stage = Invoke-Command -Session $h -ArgumentList $Source -ErrorAction Stop -ScriptBlock {
             param($from)
-            $dir = Join-Path $env:TEMP "vmfiles-stage\$([guid]::NewGuid())"
+            $dir = Join-Path $env:TEMP "vmtest-stage\$([guid]::NewGuid())"
             New-Item $dir -ItemType Directory -Force | Out-Null
-            Copy-Item $from -Destination $dir -FromSession $global:vmfilesGuest -Force
+            try { Copy-Item $from -Destination $dir -FromSession $global:vmfilesGuest -Force -ErrorAction Stop }
+            catch { Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue; throw }
             Join-Path $dir (Split-Path $from -Leaf)
         }
         try { Copy-Item $stage -Destination $Destination -FromSession $h -Force }
